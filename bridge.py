@@ -18,7 +18,6 @@ def ptz():
     t = int(request.args.get('t', 0))
     z = int(request.args.get('z', 0))
     
-    # Open camera on-demand for command execution
     backend = cv2.CAP_DSHOW if system_os == "Windows" else cv2.CAP_AVFOUNDATION
     cam = cv2.VideoCapture(0, backend)
     
@@ -30,5 +29,5 @@ def ptz():
     return jsonify({"status": "ok"})
 
 if __name__ == '__main__':
-    print(f"PTZ Bridge running on {system_os} at http://localhost:5000")
-    app.run(port=5000)
+    print(f"PTZ Bridge running on {system_os} at http://localhost:5001")
+    app.run(port=5001)
