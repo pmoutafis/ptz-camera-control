@@ -1,44 +1,32 @@
-name: Build PTZ Bridge Executables
+import platform
+import sys
+import cv2
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
+app = Flask(__name__)
+CORS(app)
 
-jobs:
-  build:
-    name: Build Executable
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest, macos-latest]
+system_os = platform.system()
+backend = cv2.CAP_DSHOW if system_os == "Windows" else cv2.CAP_AVFOUNDATION
+cam = cv2.VideoCapture(0, backend)
 
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "connected", "os": system_os})
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+@app.route('/ptz', methods=['POST'])
+def ptz():
+    p = int(request.args.get('p', 0))
+    t = int(request.args.get('t', 0))
+    z = int(request.args.get('z', 0))
+    
+    if p: cam.set(cv2.CAP_PROP_PAN, cam.get(cv2.CAP_PROP_PAN) + p)
+    if t: cam.set(cv2.CAP_PROP_TILT, cam.get(cv2.CAP_PROP_TILT) + t)
+    if z: cam.set(cv2.CAP_PROP_ZOOM, cam.get(cv2.CAP_PROP_ZOOM) + z)
+    
+    return jsonify({"status": "ok"})
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller flask flask-cors opencv-python
-
-    - name: Build Executable (Windows)
-      if: matrix.os == 'windows-latest'
-      run: |
-        pyinstaller --onefile --noconsole bridge.py --name PTZ-Bridge-Windows
-
-    - name: Build Executable (Mac)
-      if: matrix.os == 'macos-latest'
-      run: |
-        pyinstaller --onefile bridge.py --name PTZ-Bridge-Mac
-
-    - name: Upload Executable Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: PTZ-Bridge-${{ matrix.os }}
-        path: dist/PTZ-Bridge-*
+if __name__ == '__main__':
+    print(f"PTZ Bridge running on {system_os} at http://localhost:5000")
+    app.run(port=5000)
