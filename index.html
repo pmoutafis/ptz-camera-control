@@ -1,30 +1,190 @@
-async function checkBridge() {
-    try {
-        const res = await fetch('http://127.0.0.1:5001/health');
-        const data = await res.json();
-        log(`Local Bridge Status: CONNECTED (${data.os})`);
-    } catch (e) {
-        log(`Local Bridge Status: NOT DETECTED. Please launch PTZ-Bridge.`);
-    }
-}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Logitech PTZ Hardware Controller</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { background: #181818; color: #fff; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
+        .viewport { width: 90vw; max-width: 640px; height: 360px; margin: 10px auto; border-radius: 8px; border: 2px solid #444; background: #000; overflow: hidden; }
+        video { width: 100%; height: 100%; object-fit: contain; }
+        select { padding: 10px; background: #222; color: #fff; border: 1px solid #555; border-radius: 6px; font-size: 14px; width: 90vw; max-width: 640px; margin-bottom: 10px; }
+        .controls { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 15px; }
+        .grid { display: grid; grid-template-columns: repeat(3, 60px); gap: 8px; }
+        button { background: #333; color: #fff; border: 1px solid #555; padding: 10px; font-size: 14px; border-radius: 6px; cursor: pointer; }
+        button:active { background: #007acc; }
+        .btn-danger { background: #dc3545; border-color: #dc3545; }
+        .btn-success { background: #28a745; border-color: #28a745; }
+        .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
+        input[type=text] { padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; }
+        .preset-card { background: #222; padding: 10px; border-radius: 6px; margin-top: 8px; text-align: left; width: 300px; display: flex; justify-content: space-between; align-items: center; }
+        #status-log { background: #111; color: #00ff00; font-family: monospace; text-align: left; padding: 10px; margin: 15px auto; max-width: 640px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <h2>Logitech PTZ Camera Controller</h2>
+    
+    <label for="camera-select">Select Camera Source:</label><br>
+    <select id="camera-select" onchange="startSelectedCamera()"></select>
 
-async function moveMotor(axis, direction) {
-    let p = axis === 'pan' ? direction * 10 : 0;
-    let t = axis === 'tilt' ? direction * 10 : 0;
-    let z = axis === 'zoom' ? direction * 10 : 0;
+    <div class="viewport">
+        <video id="webcam" autoplay playsinline muted></video>
+    </div>
+    
+    <div class="controls">
+        <div class="grid">
+            <div></div><button onclick="moveMotor('tilt', 1)">▲</button><div></div>
+            <button onclick="moveMotor('pan', -1)">◀</button>
+            <button onclick="moveMotor('reset', 0)">⟲</button>
+            <button onclick="moveMotor('pan', 1)">▶</button>
+            <div></div><button onclick="moveMotor('tilt', -1)">▼</button><div></div>
+        </div>
 
-    if (axis === 'reset') {
-        currentCoords = { pan: 0, tilt: 0, zoom: 0 };
-    } else {
-        currentCoords.pan += p;
-        currentCoords.tilt += t;
-        currentCoords.zoom += z;
-    }
+        <div class="row">
+            <button onclick="moveMotor('zoom', -1)">Zoom Out (-)</button>
+            <button onclick="moveMotor('zoom', 1)">Zoom In (+)</button>
+        </div>
 
-    try {
-        await fetch(`http://127.0.0.1:5001/ptz?p=${p}&t=${t}&z=${z}`, { method: 'POST' });
-        log(`Command sent: Pan ${currentCoords.pan}, Tilt ${currentCoords.tilt}, Zoom ${currentCoords.zoom}`);
-    } catch (err) {
-        log("Bridge error. Ensure PTZ-Bridge is running.");
-    }
-}
+        <div class="row" style="margin-top: 15px;">
+            <input type="text" id="label" placeholder="Position Name">
+            <button class="btn-success" onclick="saveLocation()">Save Location</button>
+        </div>
+
+        <div class="row">
+            <button class="btn-danger" onclick="clearAllLocations()">Clear All Locations</button>
+        </div>
+
+        <div id="presets"></div>
+    </div>
+
+    <h3>Hardware Diagnostics</h3>
+    <div id="status-log">Initializing...</div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const statusLog = document.getElementById('status-log');
+        const cameraSelect = document.getElementById('camera-select');
+        let currentStream = null;
+        let currentCoords = { pan: 0, tilt: 0, zoom: 0 };
+
+        function log(msg) {
+            statusLog.textContent += "\n" + msg;
+        }
+
+        async function checkBridge() {
+            try {
+                const res = await fetch('http://127.0.0.1:5001/health');
+                const data = await res.json();
+                log(`Local Bridge Status: CONNECTED (${data.os})`);
+            } catch (e) {
+                log(`Local Bridge Status: NOT DETECTED. Please launch PTZ-Bridge.`);
+            }
+        }
+
+        async function moveMotor(axis, direction) {
+            let p = axis === 'pan' ? direction * 10 : 0;
+            let t = axis === 'tilt' ? direction * 10 : 0;
+            let z = axis === 'zoom' ? direction * 10 : 0;
+
+            if (axis === 'reset') {
+                currentCoords = { pan: 0, tilt: 0, zoom: 0 };
+            } else {
+                currentCoords.pan += p;
+                currentCoords.tilt += t;
+                currentCoords.zoom += z;
+            }
+
+            try {
+                await fetch(`http://127.0.0.1:5001/ptz?p=${p}&t=${t}&z=${z}`, { method: 'POST' });
+                log(`Command sent: Pan ${currentCoords.pan}, Tilt ${currentCoords.tilt}, Zoom ${currentCoords.zoom}`);
+            } catch (err) {
+                log("Bridge error. Ensure PTZ-Bridge is running.");
+            }
+        }
+
+        async function listCameras() {
+            cameraSelect.innerHTML = '';
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+            videoDevices.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.text = device.label || `Camera ${index + 1}`;
+                cameraSelect.appendChild(option);
+            });
+        }
+
+        async function startSelectedCamera() {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            const deviceId = cameraSelect.value;
+            const constraints = {
+                video: deviceId ? { deviceId: { exact: deviceId } } : true
+            };
+
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+            } catch (err) {
+                log(`Camera Error: ${err.message}`);
+            }
+        }
+
+        function saveLocation() {
+            const name = document.getElementById('label').value || "Preset Location";
+            const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
+            presets[name] = { ...currentCoords };
+            localStorage.setItem('ptz_presets', JSON.stringify(presets));
+            loadPresets();
+        }
+
+        function deleteLocation(name) {
+            const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
+            delete presets[name];
+            localStorage.setItem('ptz_presets', JSON.stringify(presets));
+            loadPresets();
+        }
+
+        function clearAllLocations() {
+            if (confirm("Delete all saved locations?")) {
+                localStorage.removeItem('ptz_presets');
+                loadPresets();
+            }
+        }
+
+        function loadPresets() {
+            const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
+            let html = '<h3>Saved Locations</h3>';
+            for (let key in presets) {
+                const p = presets[key];
+                html += `<div class="preset-card">
+                    <div>
+                        <strong>${key}</strong><br>
+                        <small>Pan: ${p.pan}, Tilt: ${p.tilt}, Zoom: ${p.zoom}</small>
+                    </div>
+                    <button class="btn-danger" style="padding: 5px 8px;" onclick="deleteLocation('${key}')">✕</button>
+                </div>`;
+            }
+            document.getElementById('presets').innerHTML = html;
+        }
+
+        async function init() {
+            statusLog.textContent = `Initializing Interface...`;
+            await checkBridge();
+            try {
+                const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                tempStream.getTracks().forEach(t => t.stop());
+                await listCameras();
+                await startSelectedCamera();
+            } catch (e) {
+                log(`Camera Permissions: ${e.message}`);
+            }
+            loadPresets();
+        }
+
+        init();
+    </script>
+</body>
+</html>
