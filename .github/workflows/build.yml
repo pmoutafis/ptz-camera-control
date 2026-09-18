@@ -31,12 +31,12 @@ jobs:
     - name: Build Executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --noconsole bridge.py --name PTZ-Bridge-Windows
+        pyinstaller --onefile --noconsole --collect-all cv2 bridge.py --name PTZ-Bridge-Windows
 
     - name: Build Executable (Mac)
       if: matrix.os == 'macos-latest'
       run: |
-        pyinstaller --onefile bridge.py --name PTZ-Bridge-Mac
+        pyinstaller --onefile --collect-all cv2 bridge.py --name PTZ-Bridge-Mac
 
     - name: Upload Executable Artifact
       uses: actions/upload-artifact@v4
