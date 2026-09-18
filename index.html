@@ -121,7 +121,13 @@
             }
             
             const cap = capabilities[axis];
-            const step = cap.step || (axis === 'zoom' ? 0.5 : 3600);
+            // Use larger step size for Pan/Tilt (18000 = 5 degrees)
+            let step = cap.step || 1;
+            if (axis === 'pan' || axis === 'tilt') {
+                step = Math.max(step, 18000); 
+            } else if (axis === 'zoom') {
+                step = Math.max(step, 0.5);
+            }
             
             let newValue = currentSettings[axis] + (direction * step);
             currentSettings[axis] = Math.max(cap.min, Math.min(cap.max, newValue));
