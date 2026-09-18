@@ -29,5 +29,5 @@ def ptz():
     return jsonify({"status": "ok"})
 
 if __name__ == '__main__':
-    print(f"PTZ Bridge running on {system_os} at http://localhost:5001")
-    app.run(port=5001)
+    print(f"PTZ Bridge running on {system_os} at http://127.0.0.1:5001")
+    app.run(host='0.0.0.0', port=5001)
