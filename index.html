@@ -1,6 +1,6 @@
 async function checkBridge() {
     try {
-        const res = await fetch('http://localhost:5001/health');
+        const res = await fetch('http://127.0.0.1:5001/health');
         const data = await res.json();
         log(`Local Bridge Status: CONNECTED (${data.os})`);
     } catch (e) {
@@ -22,7 +22,7 @@ async function moveMotor(axis, direction) {
     }
 
     try {
-        await fetch(`http://localhost:5001/ptz?p=${p}&t=${t}&z=${z}`, { method: 'POST' });
+        await fetch(`http://127.0.0.1:5001/ptz?p=${p}&t=${t}&z=${z}`, { method: 'POST' });
         log(`Command sent: Pan ${currentCoords.pan}, Tilt ${currentCoords.tilt}, Zoom ${currentCoords.zoom}`);
     } catch (err) {
         log("Bridge error. Ensure PTZ-Bridge is running.");
