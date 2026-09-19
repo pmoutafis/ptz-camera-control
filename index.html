@@ -17,7 +17,7 @@
         .btn-success { background: #28a745; border-color: #28a745; }
         .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
         input[type=text] { padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; }
-        .offset-card { background: #222; border: 1px solid #007acc; padding: 12px; border-radius: 8px; width: 90vw; max-width: 600px; margin-bottom: 10px; }
+        .offset-card { background: #222; border: 1px solid #007acc; padding: 12px; border-radius: 8px; width: 300px; margin-bottom: 10px; }
         .cli-box { background: #111; color: #00e676; font-family: monospace; font-size: 11px; padding: 8px; border-radius: 4px; text-align: left; margin-top: 6px; white-space: pre-wrap; word-break: break-all; user-select: all; }
         .preset-card { background: #222; padding: 10px; border-radius: 6px; margin-top: 8px; text-align: left; width: 90vw; max-width: 600px; display: flex; justify-content: space-between; align-items: flex-start; }
         #status-log { background: #111; color: #00ff00; font-family: monospace; text-align: left; padding: 10px; margin: 15px auto; max-width: 640px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
@@ -37,8 +37,6 @@
         <div class="offset-card">
             <strong style="color: #007acc;">Cumulative Offset from Center</strong><br>
             <span id="offset-display">Pan Steps: 0 | Tilt Steps: 0 | Zoom Raw: 100</span>
-            <div id="cli-command-display" class="cli-box"># Command to reconstruct current position from Center:
-uvcc set absolute_zoom 100</div>
         </div>
 
         <div class="grid">
@@ -74,7 +72,6 @@ uvcc set absolute_zoom 100</div>
         const statusLog = document.getElementById('status-log');
         const cameraSelect = document.getElementById('camera-select');
         const offsetDisplay = document.getElementById('offset-display');
-        const cliDisplay = document.getElementById('cli-command-display');
         let currentStream = null;
         let currentCoords = { pan: 0, tilt: 0, zoom: 100 };
         let isMoving = false;
@@ -91,7 +88,6 @@ uvcc set absolute_zoom 100</div>
         function generateCLICommands(pan, tilt, zoom) {
             let cmds = [];
             
-            // Pan steps reconstruction
             if (pan !== 0) {
                 let pDir = pan > 0 ? 1 : -1;
                 for (let i = 0; i < Math.abs(pan); i++) {
@@ -99,7 +95,6 @@ uvcc set absolute_zoom 100</div>
                 }
             }
             
-            // Tilt steps reconstruction
             if (tilt !== 0) {
                 let tDir = tilt > 0 ? 1 : -1;
                 for (let i = 0; i < Math.abs(tilt); i++) {
@@ -107,7 +102,6 @@ uvcc set absolute_zoom 100</div>
                 }
             }
 
-            // Zoom reconstruction
             cmds.push(`uvcc set absolute_zoom ${zoom}`);
 
             return `# CLI Reconstruction Commands (Run from Center):\n` + cmds.join('\n');
@@ -116,7 +110,6 @@ uvcc set absolute_zoom 100</div>
         function updateOffsetDisplay(state) {
             currentCoords = state;
             offsetDisplay.textContent = `Pan Steps: ${state.pan} | Tilt Steps: ${state.tilt} | Zoom Raw: ${state.zoom}`;
-            cliDisplay.textContent = generateCLICommands(state.pan, state.tilt, state.zoom);
         }
 
         async function checkBridge() {
