@@ -13,9 +13,9 @@ CORS(app)
 system_os = platform.system()
 uvc_lock = threading.Lock()
 
-# Define maximum step boundaries from Center to prevent over-clicking at physical walls
-MAX_PAN_STEPS = 60
-MAX_TILT_STEPS = 25
+# Recalibrated physical end-stop limits (120ms pulse steps from Center)
+MAX_PAN_STEPS = 20
+MAX_TILT_STEPS = 12
 
 # Cumulative offset tracking from Center (0, 0, 100)
 current_state = {"pan": 0, "tilt": 0, "zoom": 100}
@@ -87,7 +87,7 @@ def ptz():
         z = int(request.args.get('z', 0))
 
         if system_os == "Darwin":
-            # Apply boundary enforcement
+            # Strict boundary enforcement to prevent over-clicking at physical stops
             if p > 0 and current_state["pan"] >= MAX_PAN_STEPS: p = 0
             if p < 0 and current_state["pan"] <= -MAX_PAN_STEPS: p = 0
             if t > 0 and current_state["tilt"] >= MAX_TILT_STEPS: t = 0
