@@ -20,16 +20,33 @@ def send_uvcc_config(config_dict):
         json_bytes = json.dumps(config_dict).encode('utf-8')
         subprocess.run(["uvcc", "import"], input=json_bytes, check=True)
     except Exception as e:
-        print(f"UVC error: {e}")
+        print(f"UVC warning: {e}")
 
 def reset_hardware():
     global current_zoom, current_state
-    current_state = {"pan": 0, "tilt": 0, "zoom": 0}
-    current_zoom = 100
     
     if system_os == "Darwin":
-        send_uvcc_config({"pantilt_reset": 1})
-        send_uvcc_config({"relative_pan_tilt": [0, 0, 0, 0]})
+        # 1. Walk Pan back to 0
+        pan_steps = current_state["pan"]
+        if pan_steps != 0:
+            direction = -1 if pan_steps > 0 else 1
+            for _ in range(abs(pan_steps)):
+                send_uvcc_config({"relative_pan_tilt": [direction, 1, 0, 0]})
+                time.sleep(0.12)
+                send_uvcc_config({"relative_pan_tilt": [0, 0, 0, 0]})
+                time.sleep(0.05)
+
+        # 2. Walk Tilt back to 0
+        tilt_steps = current_state["tilt"]
+        if tilt_steps != 0:
+            direction = -1 if tilt_steps > 0 else 1
+            for _ in range(abs(tilt_steps)):
+                send_uvcc_config({"relative_pan_tilt": [0, 0, direction, 1]})
+                time.sleep(0.12)
+                send_uvcc_config({"relative_pan_tilt": [0, 0, 0, 0]})
+                time.sleep(0.05)
+
+        # 3. Reset Zoom to 100 (1x)
         send_uvcc_config({"absolute_zoom": 100})
     else:
         cam = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -38,6 +55,9 @@ def reset_hardware():
             cam.set(cv2.CAP_PROP_TILT, 0)
             cam.set(cv2.CAP_PROP_ZOOM, 100)
             cam.release()
+
+    current_state = {"pan": 0, "tilt": 0, "zoom": 0}
+    current_zoom = 100
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -67,7 +87,6 @@ def ptz():
         tilt_speed = 1 if t != 0 else 0
         
         if p != 0 or t != 0:
-            # 120ms movement pulse followed by stop command
             send_uvcc_config({
                 "relative_pan_tilt": [pan_action, pan_speed, tilt_action, tilt_speed]
             })
@@ -76,13 +95,14 @@ def ptz():
                 "relative_pan_tilt": [0, 0, 0, 0]
             })
             
-            current_state["pan"] += (1 if p > 0 else (-1 if p < 0 else 0))
-            current_state["tilt"] += (1 if t > 0 else (-1 if t < 0 else 0))
+            if p != 0: current_state["pan"] += pan_action
+            if t != 0: current_state["tilt"] += tilt_action
         
         if z != 0:
-            current_zoom = max(100, min(1000, current_zoom + (z * 25)))
+            # Smooth 15-unit zoom increment
+            current_zoom = max(100, min(1000, current_zoom + (z * 15)))
             send_uvcc_config({"absolute_zoom": current_zoom})
-            current_state["zoom"] = (current_zoom - 100) // 25
+            current_state["zoom"] = (current_zoom - 100) // 15
 
     else:
         current_state["pan"] += p
