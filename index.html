@@ -84,18 +84,21 @@
             let p = axis === 'pan' ? direction * 10 : 0;
             let t = axis === 'tilt' ? direction * 10 : 0;
             let z = axis === 'zoom' ? direction * 10 : 0;
-        
+
             if (axis === 'reset') {
                 currentCoords = { pan: 0, tilt: 0, zoom: 0 };
+            } else {
+                currentCoords.pan += p;
+                currentCoords.tilt += t;
+                currentCoords.zoom += z;
             }
-        
+
             try {
                 const res = await fetch(`http://127.0.0.1:5001/ptz?p=${p}&t=${t}&z=${z}`, { method: 'POST' });
-                const data = await res.json();
-                
-                log(`Driver Response: Opened=${data.device_opened}, PanResult=${data.pan_applied}, Coords=(${data.state.pan}, ${data.state.tilt}, ${data.state.zoom})`);
+                await res.json();
+                log(`Command Sent: Pan=${currentCoords.pan}, Tilt=${currentCoords.tilt}, Zoom=${currentCoords.zoom}`);
             } catch (err) {
-                log("Bridge communication error. Ensure PTZ-Bridge is running.");
+                log("Bridge error. Ensure PTZ-Bridge is running.");
             }
         }
 
