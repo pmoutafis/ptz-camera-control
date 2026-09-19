@@ -16,6 +16,7 @@
         .btn-success { background: #28a745; border-color: #28a745; }
         .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
         input[type=text] { padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; }
+        .offset-card { background: #222; border: 1px solid #007acc; padding: 12px; border-radius: 8px; width: 300px; margin-bottom: 10px; }
         .preset-card { background: #222; padding: 10px; border-radius: 6px; margin-top: 8px; text-align: left; width: 300px; display: flex; justify-content: space-between; align-items: center; }
         #status-log { background: #111; color: #00ff00; font-family: monospace; text-align: left; padding: 10px; margin: 15px auto; max-width: 640px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
     </style>
@@ -31,6 +32,11 @@
     </div>
     
     <div class="controls">
+        <div class="offset-card">
+            <strong style="color: #007acc;">Cumulative Offset from Center</strong><br>
+            <span id="offset-display">Pan: 0 | Tilt: 0 | Zoom: 0</span>
+        </div>
+
         <div class="grid">
             <div></div><button onclick="moveMotor('tilt', 1)">▲</button><div></div>
             <button onclick="moveMotor('pan', -1)">◀</button>
@@ -63,6 +69,7 @@
         const video = document.getElementById('webcam');
         const statusLog = document.getElementById('status-log');
         const cameraSelect = document.getElementById('camera-select');
+        const offsetDisplay = document.getElementById('offset-display');
         let currentStream = null;
         let currentCoords = { pan: 0, tilt: 0, zoom: 0 };
 
@@ -70,10 +77,16 @@
             statusLog.textContent += "\n" + msg;
         }
 
+        function updateOffsetDisplay(state) {
+            currentCoords = state;
+            offsetDisplay.textContent = `Pan: ${state.pan} | Tilt: ${state.tilt} | Zoom: ${state.zoom}`;
+        }
+
         async function checkBridge() {
             try {
                 const res = await fetch('http://127.0.0.1:5001/health');
                 const data = await res.json();
+                if (data.state) updateOffsetDisplay(data.state);
                 log(`Local Bridge Status: CONNECTED (${data.os})`);
             } catch (e) {
                 log(`Local Bridge Status: NOT DETECTED. Please launch PTZ-Bridge.`);
@@ -81,24 +94,26 @@
         }
 
         async function moveMotor(axis, direction) {
-            let p = axis === 'pan' ? direction * 10 : 0;
-            let t = axis === 'tilt' ? direction * 10 : 0;
-            let z = axis === 'zoom' ? direction * 10 : 0;
-
-            if (axis === 'reset') {
-                currentCoords = { pan: 0, tilt: 0, zoom: 0 };
-            } else {
-                currentCoords.pan += p;
-                currentCoords.tilt += t;
-                currentCoords.zoom += z;
-            }
-
             try {
-                const res = await fetch(`http://127.0.0.1:5001/ptz?p=${p}&t=${t}&z=${z}`, { method: 'POST' });
-                await res.json();
-                log(`Command Sent: Pan=${currentCoords.pan}, Tilt=${currentCoords.tilt}, Zoom=${currentCoords.zoom}`);
+                let url = `http://127.0.0.1:5001/ptz?p=0&t=0&z=0`;
+                if (axis === 'reset') {
+                    url = `http://127.0.0.1:5001/reset`;
+                } else {
+                    let p = axis === 'pan' ? direction : 0;
+                    let t = axis === 'tilt' ? direction : 0;
+                    let z = axis === 'zoom' ? direction : 0;
+                    url = `http://127.0.0.1:5001/ptz?p=${p}&t=${t}&z=${z}`;
+                }
+
+                const res = await fetch(url, { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.state) {
+                    updateOffsetDisplay(data.state);
+                    log(`Position Offset: Pan=${data.state.pan}, Tilt=${data.state.tilt}, Zoom=${data.state.zoom}`);
+                }
             } catch (err) {
-                log("Bridge error. Ensure PTZ-Bridge is running.");
+                log("Bridge communication error. Ensure PTZ-Bridge is running.");
             }
         }
 
@@ -163,7 +178,7 @@
                 html += `<div class="preset-card">
                     <div>
                         <strong>${key}</strong><br>
-                        <small>Pan: ${p.pan}, Tilt: ${p.tilt}, Zoom: ${p.zoom}</small>
+                        <small>Offset: Pan ${p.pan}, Tilt ${p.tilt}, Zoom ${p.zoom}</small>
                     </div>
                     <button class="btn-danger" style="padding: 5px 8px;" onclick="deleteLocation('${key}')">✕</button>
                 </div>`;
