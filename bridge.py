@@ -1,4 +1,6 @@
 import platform
+import subprocess
+import json
 import cv2
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -7,9 +9,11 @@ app = Flask(__name__)
 CORS(app)
 
 system_os = platform.system()
+current_zoom = 100
 
-# Maintain coordinate state in memory
-current_state = {"pan": 0, "tilt": 0, "zoom": 0}
+def send_uvcc_config(config_dict):
+    json_bytes = json.dumps(config_dict).encode('utf-8')
+    subprocess.run(["uvcc", "import"], input=json_bytes, check=True)
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -17,40 +21,38 @@ def health():
 
 @app.route('/ptz', methods=['POST'])
 def ptz():
+    global current_zoom
     p = int(request.args.get('p', 0))
     t = int(request.args.get('t', 0))
     z = int(request.args.get('z', 0))
     
-    current_state["pan"] += p
-    current_state["tilt"] += t
-    current_state["zoom"] += z
-
-    backend = cv2.CAP_DSHOW if system_os == "Windows" else cv2.CAP_AVFOUNDATION
-    cam = cv2.VideoCapture(0, backend)
-    
-    opened = cam.isOpened()
-    pan_success = False
-    tilt_success = False
-    zoom_success = False
-
-    if opened:
-        # Read a dummy frame to wake up hardware buffers
-        cam.read()
+    if system_os == "Darwin":
+        # UVC signed mapping: 1 = Right/Up, -1 = Left/Down, 0 = Stop
+        pan_action = 1 if p > 0 else (-1 if p < 0 else 0)
+        pan_speed = 1 if p != 0 else 0
         
-        if p: pan_success = cam.set(cv2.CAP_PROP_PAN, current_state["pan"])
-        if t: tilt_success = cam.set(cv2.CAP_PROP_TILT, current_state["tilt"])
-        if z: zoom_success = cam.set(cv2.CAP_PROP_ZOOM, current_state["zoom"])
+        tilt_action = 1 if t > 0 else (-1 if t < 0 else 0)
+        tilt_speed = 1 if t != 0 else 0
         
-        cam.release()
+        if p != 0 or t != 0:
+            send_uvcc_config({
+                "relative_pan_tilt": [pan_action, pan_speed, tilt_action, tilt_speed]
+            })
+        
+        if z != 0:
+            current_zoom = max(100, min(1000, current_zoom + (z * 50)))
+            send_uvcc_config({
+                "absolute_zoom": current_zoom
+            })
+    else:
+        cam = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if cam.isOpened():
+            if p: cam.set(cv2.CAP_PROP_PAN, cam.get(cv2.CAP_PROP_PAN) + p)
+            if t: cam.set(cv2.CAP_PROP_TILT, cam.get(cv2.CAP_PROP_TILT) + t)
+            if z: cam.set(cv2.CAP_PROP_ZOOM, cam.get(cv2.CAP_PROP_ZOOM) + z)
+            cam.release()
 
-    return jsonify({
-        "status": "ok",
-        "device_opened": opened,
-        "pan_applied": pan_success,
-        "tilt_applied": tilt_success,
-        "zoom_applied": zoom_success,
-        "state": current_state
-    })
+    return jsonify({"status": "ok"})
 
 if __name__ == '__main__':
     print(f"PTZ Bridge running on {system_os} at http://127.0.0.1:5001")
