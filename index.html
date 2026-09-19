@@ -11,13 +11,15 @@
         .controls { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 15px; }
         .grid { display: grid; grid-template-columns: repeat(3, 60px); gap: 8px; }
         button { background: #333; color: #fff; border: 1px solid #555; padding: 10px; font-size: 14px; border-radius: 6px; cursor: pointer; }
-        button:active { background: #007acc; }
+        button:disabled { opacity: 0.3; cursor: not-allowed; }
+        button:active:not(:disabled) { background: #007acc; }
         .btn-danger { background: #dc3545; border-color: #dc3545; }
         .btn-success { background: #28a745; border-color: #28a745; }
         .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
         input[type=text] { padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; }
-        .offset-card { background: #222; border: 1px solid #007acc; padding: 12px; border-radius: 8px; width: 300px; margin-bottom: 10px; }
-        .preset-card { background: #222; padding: 10px; border-radius: 6px; margin-top: 8px; text-align: left; width: 300px; display: flex; justify-content: space-between; align-items: center; }
+        .offset-card { background: #222; border: 1px solid #007acc; padding: 12px; border-radius: 8px; width: 90vw; max-width: 600px; margin-bottom: 10px; }
+        .cli-box { background: #111; color: #00e676; font-family: monospace; font-size: 11px; padding: 8px; border-radius: 4px; text-align: left; margin-top: 6px; white-space: pre-wrap; word-break: break-all; user-select: all; }
+        .preset-card { background: #222; padding: 10px; border-radius: 6px; margin-top: 8px; text-align: left; width: 90vw; max-width: 600px; display: flex; justify-content: space-between; align-items: flex-start; }
         #status-log { background: #111; color: #00ff00; font-family: monospace; text-align: left; padding: 10px; margin: 15px auto; max-width: 640px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
     </style>
 </head>
@@ -34,20 +36,22 @@
     <div class="controls">
         <div class="offset-card">
             <strong style="color: #007acc;">Cumulative Offset from Center</strong><br>
-            <span id="offset-display">Pan: 0 | Tilt: 0 | Zoom: 0</span>
+            <span id="offset-display">Pan Steps: 0 | Tilt Steps: 0 | Zoom Raw: 100</span>
+            <div id="cli-command-display" class="cli-box"># Command to reconstruct current position from Center:
+uvcc set absolute_zoom 100</div>
         </div>
 
         <div class="grid">
-            <div></div><button onclick="moveMotor('tilt', 1)">▲</button><div></div>
-            <button onclick="moveMotor('pan', -1)">◀</button>
-            <button onclick="moveMotor('reset', 0)">⟲</button>
-            <button onclick="moveMotor('pan', 1)">▶</button>
-            <div></div><button onclick="moveMotor('tilt', -1)">▼</button><div></div>
+            <div></div><button class="ctrl-btn" onclick="moveMotor('tilt', 1)">▲</button><div></div>
+            <button class="ctrl-btn" onclick="moveMotor('pan', -1)">◀</button>
+            <button class="ctrl-btn" onclick="moveMotor('reset', 0)">⟲</button>
+            <button class="ctrl-btn" onclick="moveMotor('pan', 1)">▶</button>
+            <div></div><button class="ctrl-btn" onclick="moveMotor('tilt', -1)">▼</button><div></div>
         </div>
 
         <div class="row">
-            <button onclick="moveMotor('zoom', -1)">Zoom Out (-)</button>
-            <button onclick="moveMotor('zoom', 1)">Zoom In (+)</button>
+            <button class="ctrl-btn" onclick="moveMotor('zoom', -1)">Zoom Out (-)</button>
+            <button class="ctrl-btn" onclick="moveMotor('zoom', 1)">Zoom In (+)</button>
         </div>
 
         <div class="row" style="margin-top: 15px;">
@@ -70,16 +74,49 @@
         const statusLog = document.getElementById('status-log');
         const cameraSelect = document.getElementById('camera-select');
         const offsetDisplay = document.getElementById('offset-display');
+        const cliDisplay = document.getElementById('cli-command-display');
         let currentStream = null;
-        let currentCoords = { pan: 0, tilt: 0, zoom: 0 };
+        let currentCoords = { pan: 0, tilt: 0, zoom: 100 };
+        let isMoving = false;
 
         function log(msg) {
             statusLog.textContent += "\n" + msg;
         }
 
+        function setButtonsDisabled(disabled) {
+            const btns = document.querySelectorAll('.ctrl-btn');
+            btns.forEach(b => b.disabled = disabled);
+        }
+
+        function generateCLICommands(pan, tilt, zoom) {
+            let cmds = [];
+            
+            // Pan steps reconstruction
+            if (pan !== 0) {
+                let pDir = pan > 0 ? 1 : -1;
+                for (let i = 0; i < Math.abs(pan); i++) {
+                    cmds.push(`echo '{"relative_pan_tilt": [${pDir}, 1, 0, 0]}' | uvcc import; sleep 0.12; echo '{"relative_pan_tilt": [0,0,0,0]}' | uvcc import`);
+                }
+            }
+            
+            // Tilt steps reconstruction
+            if (tilt !== 0) {
+                let tDir = tilt > 0 ? 1 : -1;
+                for (let i = 0; i < Math.abs(tilt); i++) {
+                    cmds.push(`echo '{"relative_pan_tilt": [0, 0, ${tDir}, 1]}' | uvcc import; sleep 0.12; echo '{"relative_pan_tilt": [0,0,0,0]}' | uvcc import`);
+                }
+            }
+
+            // Zoom reconstruction
+            cmds.push(`uvcc set absolute_zoom ${zoom}`);
+
+            return `# CLI Reconstruction Commands (Run from Center):\n` + cmds.join('\n');
+        }
+
         function updateOffsetDisplay(state) {
             currentCoords = state;
-            offsetDisplay.textContent = `Pan: ${state.pan} | Tilt: ${state.tilt} | Zoom: ${state.zoom}`;
+            offsetDisplay.textContent = `Pan Steps: ${state.pan} | Tilt Steps: ${state.tilt} | Zoom Raw: ${state.zoom}`;
+            cliDisplay.textContent = generateCLICommands(state.pan, state.tilt, state.zoom);
         }
 
         async function checkBridge() {
@@ -94,6 +131,10 @@
         }
 
         async function moveMotor(axis, direction) {
+            if (isMoving) return;
+            isMoving = true;
+            setButtonsDisabled(true);
+
             try {
                 let url = `http://127.0.0.1:5001/ptz?p=0&t=0&z=0`;
                 if (axis === 'reset') {
@@ -113,7 +154,10 @@
                     log(`Position Offset: Pan=${data.state.pan}, Tilt=${data.state.tilt}, Zoom=${data.state.zoom}`);
                 }
             } catch (err) {
-                log("Bridge communication error. Ensure PTZ-Bridge is running.");
+                log("Bridge error or hardware busy.");
+            } finally {
+                isMoving = false;
+                setButtonsDisabled(false);
             }
         }
 
@@ -151,7 +195,12 @@
         function saveLocation() {
             const name = document.getElementById('label').value || "Preset Location";
             const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
-            presets[name] = { ...currentCoords };
+            const cliScript = generateCLICommands(currentCoords.pan, currentCoords.tilt, currentCoords.zoom);
+            
+            presets[name] = { 
+                coords: { ...currentCoords },
+                cli: cliScript
+            };
             localStorage.setItem('ptz_presets', JSON.stringify(presets));
             loadPresets();
         }
@@ -174,13 +223,17 @@
             const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
             let html = '<h3>Saved Locations</h3>';
             for (let key in presets) {
-                const p = presets[key];
+                const item = presets[key];
+                const p = item.coords || item;
+                const cli = item.cli || generateCLICommands(p.pan || 0, p.tilt || 0, p.zoom || 100);
+                
                 html += `<div class="preset-card">
-                    <div>
+                    <div style="flex: 1;">
                         <strong>${key}</strong><br>
-                        <small>Offset: Pan ${p.pan}, Tilt ${p.tilt}, Zoom ${p.zoom}</small>
+                        <small>Pan Steps: ${p.pan} | Tilt Steps: ${p.tilt} | Zoom Raw: ${p.zoom}</small>
+                        <div class="cli-box">${cli}</div>
                     </div>
-                    <button class="btn-danger" style="padding: 5px 8px;" onclick="deleteLocation('${key}')">✕</button>
+                    <button class="btn-danger" style="padding: 5px 8px; margin-left: 10px;" onclick="deleteLocation('${key}')">✕</button>
                 </div>`;
             }
             document.getElementById('presets').innerHTML = html;
