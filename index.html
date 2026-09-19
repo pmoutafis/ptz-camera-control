@@ -18,8 +18,7 @@
         .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
         input[type=text] { padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; }
         .offset-card { background: #222; border: 1px solid #007acc; padding: 12px; border-radius: 8px; width: 300px; margin-bottom: 10px; }
-        .cli-box { background: #111; color: #00e676; font-family: monospace; font-size: 11px; padding: 8px; border-radius: 4px; text-align: left; margin-top: 6px; white-space: pre-wrap; word-break: break-all; user-select: all; }
-        .preset-card { background: #222; padding: 10px; border-radius: 6px; margin-top: 8px; text-align: left; width: 90vw; max-width: 600px; display: flex; justify-content: space-between; align-items: flex-start; }
+        .preset-card { background: #222; padding: 10px 15px; border-radius: 6px; margin-top: 8px; text-align: left; width: 300px; display: flex; justify-content: space-between; align-items: center; }
         #status-log { background: #111; color: #00ff00; font-family: monospace; text-align: left; padding: 10px; margin: 15px auto; max-width: 640px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
     </style>
 </head>
@@ -81,30 +80,8 @@
         }
 
         function setButtonsDisabled(disabled) {
-            const btns = document.querySelectorAll('.ctrl-btn');
+            const btns = document.querySelectorAll('.ctrl-btn, .preset-btn');
             btns.forEach(b => b.disabled = disabled);
-        }
-
-        function generateCLICommands(pan, tilt, zoom) {
-            let cmds = [];
-            
-            if (pan !== 0) {
-                let pDir = pan > 0 ? 1 : -1;
-                for (let i = 0; i < Math.abs(pan); i++) {
-                    cmds.push(`echo '{"relative_pan_tilt": [${pDir}, 1, 0, 0]}' | uvcc import; sleep 0.12; echo '{"relative_pan_tilt": [0,0,0,0]}' | uvcc import`);
-                }
-            }
-            
-            if (tilt !== 0) {
-                let tDir = tilt > 0 ? 1 : -1;
-                for (let i = 0; i < Math.abs(tilt); i++) {
-                    cmds.push(`echo '{"relative_pan_tilt": [0, 0, ${tDir}, 1]}' | uvcc import; sleep 0.12; echo '{"relative_pan_tilt": [0,0,0,0]}' | uvcc import`);
-                }
-            }
-
-            cmds.push(`uvcc set absolute_zoom ${zoom}`);
-
-            return `# CLI Reconstruction Commands (Run from Center):\n` + cmds.join('\n');
         }
 
         function updateOffsetDisplay(state) {
@@ -154,6 +131,27 @@
             }
         }
 
+        async function goToPreset(p, t, z) {
+            if (isMoving) return;
+            isMoving = true;
+            setButtonsDisabled(true);
+            log(`Recalling Preset: Pan=${p}, Tilt=${t}, Zoom=${z}...`);
+
+            try {
+                const res = await fetch(`http://127.0.0.1:5001/goto?p=${p}&t=${t}&z=${z}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.state) {
+                    updateOffsetDisplay(data.state);
+                    log(`Arrived at Preset Position.`);
+                }
+            } catch (err) {
+                log("Error recalling preset position.");
+            } finally {
+                isMoving = false;
+                setButtonsDisabled(false);
+            }
+        }
+
         async function listCameras() {
             cameraSelect.innerHTML = '';
             const devices = await navigator.mediaDevices.enumerateDevices();
@@ -188,12 +186,7 @@
         function saveLocation() {
             const name = document.getElementById('label').value || "Preset Location";
             const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
-            const cliScript = generateCLICommands(currentCoords.pan, currentCoords.tilt, currentCoords.zoom);
-            
-            presets[name] = { 
-                coords: { ...currentCoords },
-                cli: cliScript
-            };
+            presets[name] = { ...currentCoords };
             localStorage.setItem('ptz_presets', JSON.stringify(presets));
             loadPresets();
         }
@@ -216,17 +209,16 @@
             const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
             let html = '<h3>Saved Locations</h3>';
             for (let key in presets) {
-                const item = presets[key];
-                const p = item.coords || item;
-                const cli = item.cli || generateCLICommands(p.pan || 0, p.tilt || 0, p.zoom || 100);
-                
+                const p = presets[key];
                 html += `<div class="preset-card">
-                    <div style="flex: 1;">
+                    <div>
                         <strong>${key}</strong><br>
-                        <small>Pan Steps: ${p.pan} | Tilt Steps: ${p.tilt} | Zoom Raw: ${p.zoom}</small>
-                        <div class="cli-box">${cli}</div>
+                        <small>Pan: ${p.pan} | Tilt: ${p.tilt} | Zoom: ${p.zoom}</small>
                     </div>
-                    <button class="btn-danger" style="padding: 5px 8px; margin-left: 10px;" onclick="deleteLocation('${key}')">✕</button>
+                    <div>
+                        <button class="btn-success preset-btn" style="padding: 5px 10px; margin-right: 4px;" onclick="goToPreset(${p.pan}, ${p.tilt}, ${p.zoom})">Go</button>
+                        <button class="btn-danger preset-btn" style="padding: 5px 8px;" onclick="deleteLocation('${key}')">✕</button>
+                    </div>
                 </div>`;
             }
             document.getElementById('presets').innerHTML = html;
