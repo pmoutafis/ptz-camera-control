@@ -27,7 +27,7 @@ def send_uvcc_config(config_dict):
 
 def reset_hardware():
     global current_state
-    if system_os == "Darwin":
+    if system_os in ["Darwin", "Linux"]:
         pan_steps = current_state["pan"]
         if pan_steps != 0:
             direction = -1 if pan_steps > 0 else 1
@@ -79,10 +79,9 @@ def goto():
         target_t = max(-MAX_TILT_STEPS, min(MAX_TILT_STEPS, int(request.args.get('t', 0))))
         target_z = max(100, min(1000, int(request.args.get('z', 100))))
 
-        if system_os == "Darwin":
-            reset_hardware()  # Recalibrate to Center first
+        if system_os in ["Darwin", "Linux"]:
+            reset_hardware()
             
-            # Step to target Pan
             if target_p != 0:
                 p_dir = 1 if target_p > 0 else -1
                 for _ in range(abs(target_p)):
@@ -91,7 +90,6 @@ def goto():
                     send_uvcc_config({"relative_pan_tilt": [0, 0, 0, 0]})
                     time.sleep(0.05)
 
-            # Step to target Tilt
             if target_t != 0:
                 t_dir = 1 if target_t > 0 else -1
                 for _ in range(abs(target_t)):
@@ -100,7 +98,6 @@ def goto():
                     send_uvcc_config({"relative_pan_tilt": [0, 0, 0, 0]})
                     time.sleep(0.05)
 
-            # Set target Optical Zoom
             send_uvcc_config({"absolute_zoom": target_z})
             current_state = {"pan": target_p, "tilt": target_t, "zoom": target_z}
         else:
@@ -127,7 +124,7 @@ def ptz():
         t = int(request.args.get('t', 0))
         z = int(request.args.get('z', 0))
 
-        if system_os == "Darwin":
+        if system_os in ["Darwin", "Linux"]:
             if p > 0 and current_state["pan"] >= MAX_PAN_STEPS: p = 0
             if p < 0 and current_state["pan"] <= -MAX_PAN_STEPS: p = 0
             if t > 0 and current_state["tilt"] >= MAX_TILT_STEPS: t = 0
