@@ -20,10 +20,15 @@
         .offset-card { background: #222; border: 1px solid #007acc; padding: 12px; border-radius: 8px; width: 300px; margin-bottom: 10px; }
         .preset-card { background: #222; padding: 10px 15px; border-radius: 6px; margin-top: 8px; text-align: left; width: 300px; display: flex; justify-content: space-between; align-items: center; }
         #status-log { background: #111; color: #00ff00; font-family: monospace; text-align: left; padding: 10px; margin: 15px auto; max-width: 640px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+        .warning-box { background: #ff9800; color: #000; padding: 10px; border-radius: 6px; margin: 10px auto; max-width: 600px; font-weight: bold; display: none; }
     </style>
 </head>
 <body>
     <h2>Chromebook PTZ Camera Controller</h2>
+
+    <div id="ptz-warning" class="warning-box">
+        ⚠️ Physical movement blocked. Click the Lock/Tune icon next to the URL bar, enable "Use and move your camera", and refresh.
+    </div>
     
     <label for="camera-select">Select Camera Source:</label><br>
     <select id="camera-select" onchange="startSelectedCamera()"></select>
@@ -34,7 +39,7 @@
     
     <div class="controls">
         <div class="offset-card">
-            <strong style="color: #007acc;">Hardware Encoder Position</strong><br>
+            <strong style="color: #007acc;">Hardware Position</strong><br>
             <span id="offset-display">Pan: -- | Tilt: -- | Zoom: --</span>
         </div>
 
@@ -64,13 +69,14 @@
     </div>
 
     <h3>Hardware Diagnostics</h3>
-    <div id="status-log">Initializing Browser Native Driver...</div>
+    <div id="status-log">Initializing Native Browser Controller...</div>
 
     <script>
         const video = document.getElementById('webcam');
         const statusLog = document.getElementById('status-log');
         const cameraSelect = document.getElementById('camera-select');
         const offsetDisplay = document.getElementById('offset-display');
+        const warningBox = document.getElementById('ptz-warning');
         
         let currentStream = null;
         let videoTrack = null;
@@ -129,11 +135,18 @@
                 videoTrack = currentStream.getVideoTracks()[0];
                 
                 const capabilities = videoTrack.getCapabilities();
-                log(`Native PTZ Capabilities Detected: Pan=[${capabilities.pan?.min}, ${capabilities.pan?.max}], Zoom=[${capabilities.zoom?.min}, ${capabilities.zoom?.max}]`);
+                
+                if (!capabilities.pan && !capabilities.zoom) {
+                    warningBox.style.display = 'block';
+                    log("PTZ capabilities not detected. Grant camera movement permission in Chrome Site Settings.");
+                } else {
+                    warningBox.style.display = 'none';
+                    log(`Native Capabilities Detected: Pan=[${capabilities.pan?.min}, ${capabilities.pan?.max}], Zoom=[${capabilities.zoom?.min}, ${capabilities.zoom?.max}]`);
+                }
                 
                 updateDisplay();
             } catch (err) {
-                log(`Camera Error: ${err.message}. If prompt appears, grant Pan/Tilt/Zoom permission.`);
+                log(`Camera Error: ${err.message}`);
             }
         }
 
@@ -146,24 +159,23 @@
                 const caps = videoTrack.getCapabilities();
                 const settings = videoTrack.getSettings();
 
-                // Compute smooth step sizes based on hardware capabilities
-                const panStep = caps.pan ? (caps.pan.step || 3600) * 3 : 0;
-                const tiltStep = caps.tilt ? (caps.tilt.step || 3600) * 3 : 0;
-                const zoomStep = caps.zoom ? (caps.zoom.step || 10) * 3 : 0;
+                // Fallback step constants for Logitech UVC drivers if caps.step is undefined
+                const panStep = caps.pan ? (caps.pan.step || 3600) * 3 : 10800;
+                const tiltStep = caps.tilt ? (caps.tilt.step || 3600) * 3 : 10800;
+                const zoomStep = caps.zoom ? (caps.zoom.step || 10) * 3 : 30;
 
                 let targetPan = (settings.pan || 0) + (panDir * panStep);
                 let targetTilt = (settings.tilt || 0) + (tiltDir * tiltStep);
                 let targetZoom = (settings.zoom || 100) + (zoomDir * zoomStep);
 
-                // Enforce hardware bounds
                 if (caps.pan) targetPan = Math.max(caps.pan.min, Math.min(caps.pan.max, targetPan));
                 if (caps.tilt) targetTilt = Math.max(caps.tilt.min, Math.min(caps.tilt.max, targetTilt));
                 if (caps.zoom) targetZoom = Math.max(caps.zoom.min, Math.min(caps.zoom.max, targetZoom));
 
                 const advancedConstraints = {};
-                if (panDir !== 0 && caps.pan) advancedConstraints.pan = targetPan;
-                if (tiltDir !== 0 && caps.tilt) advancedConstraints.tilt = targetTilt;
-                if (zoomDir !== 0 && caps.zoom) advancedConstraints.zoom = targetZoom;
+                if (panDir !== 0) advancedConstraints.pan = targetPan;
+                if (tiltDir !== 0) advancedConstraints.tilt = targetTilt;
+                if (zoomDir !== 0) advancedConstraints.zoom = targetZoom;
 
                 await videoTrack.applyConstraints({ advanced: [advancedConstraints] });
                 updateDisplay();
