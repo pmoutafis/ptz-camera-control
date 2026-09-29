@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chromebook Logitech PTZ Controller</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { background: #181818; color: #fff; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
+        .viewport { width: 90vw; max-width: 640px; height: 360px; margin: 10px auto; border-radius: 8px; border: 2px solid #444; background: #000; overflow: hidden; }
+        video { width: 100%; height: 100%; object-fit: contain; }
+        select { padding: 10px; background: #222; color: #fff; border: 1px solid #555; border-radius: 6px; font-size: 14px; width: 90vw; max-width: 640px; margin-bottom: 10px; }
+        .controls { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 15px; }
+        .grid { display: grid; grid-template-columns: repeat(3, 60px); gap: 8px; }
+        button { background: #333; color: #fff; border: 1px solid #555; padding: 10px; font-size: 14px; border-radius: 6px; cursor: pointer; }
+        button:disabled { opacity: 0.3; cursor: not-allowed; }
+        button:active:not(:disabled) { background: #007acc; }
+        .btn-danger { background: #dc3545; border-color: #dc3545; }
+        .btn-success { background: #28a745; border-color: #28a745; }
+        .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
+        input[type=text] { padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; }
+        .offset-card { background: #222; border: 1px solid #007acc; padding: 12px; border-radius: 8px; width: 300px; margin-bottom: 10px; }
+        .preset-card { background: #222; padding: 10px 15px; border-radius: 6px; margin-top: 8px; text-align: left; width: 300px; display: flex; justify-content: space-between; align-items: center; }
+        #status-log { background: #111; color: #00ff00; font-family: monospace; text-align: left; padding: 10px; margin: 15px auto; max-width: 640px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <h2>Chromebook PTZ Camera Controller</h2>
+    
+    <label for="camera-select">Select Camera Source:</label><br>
+    <select id="camera-select" onchange="startSelectedCamera()"></select>
+
+    <div class="viewport">
+        <video id="webcam" autoplay playsinline muted></video>
+    </div>
+    
+    <div class="controls">
+        <div class="offset-card">
+            <strong style="color: #007acc;">Hardware Encoder Position</strong><br>
+            <span id="offset-display">Pan: -- | Tilt: -- | Zoom: --</span>
+        </div>
+
+        <div class="grid">
+            <div></div><button class="ctrl-btn" onclick="moveMotor(0, 1, 0)">▲</button><div></div>
+            <button class="ctrl-btn" onclick="moveMotor(-1, 0, 0)">◀</button>
+            <button class="ctrl-btn" onclick="resetToCenter()">⟲</button>
+            <button class="ctrl-btn" onclick="moveMotor(1, 0, 0)">▶</button>
+            <div></div><button class="ctrl-btn" onclick="moveMotor(0, -1, 0)">▼</button><div></div>
+        </div>
+
+        <div class="row">
+            <button class="ctrl-btn" onclick="moveMotor(0, 0, -1)">Zoom Out (-)</button>
+            <button class="ctrl-btn" onclick="moveMotor(0, 0, 1)">Zoom In (+)</button>
+        </div>
+
+        <div class="row" style="margin-top: 15px;">
+            <input type="text" id="label" placeholder="Position Name">
+            <button class="btn-success" onclick="saveLocation()">Save Location</button>
+        </div>
+
+        <div class="row">
+            <button class="btn-danger" onclick="clearAllLocations()">Clear All Locations</button>
+        </div>
+
+        <div id="presets"></div>
+    </div>
+
+    <h3>Hardware Diagnostics</h3>
+    <div id="status-log">Initializing Browser Native Driver...</div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const statusLog = document.getElementById('status-log');
+        const cameraSelect = document.getElementById('camera-select');
+        const offsetDisplay = document.getElementById('offset-display');
+        
+        let currentStream = null;
+        let videoTrack = null;
+        let isMoving = false;
+
+        function log(msg) {
+            statusLog.textContent += "\n" + msg;
+        }
+
+        function setButtonsDisabled(disabled) {
+            const btns = document.querySelectorAll('.ctrl-btn, .preset-btn');
+            btns.forEach(b => b.disabled = disabled);
+        }
+
+        function updateDisplay() {
+            if (!videoTrack) return;
+            const settings = videoTrack.getSettings();
+            const p = settings.pan !== undefined ? Math.round(settings.pan) : 'N/A';
+            const t = settings.tilt !== undefined ? Math.round(settings.tilt) : 'N/A';
+            const z = settings.zoom !== undefined ? Math.round(settings.zoom) : 'N/A';
+            
+            offsetDisplay.textContent = `Pan: ${p} | Tilt: ${t} | Zoom: ${z}`;
+        }
+
+        async function listCameras() {
+            cameraSelect.innerHTML = '';
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+            videoDevices.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.text = device.label || `Camera ${index + 1}`;
+                cameraSelect.appendChild(option);
+            });
+        }
+
+        async function startSelectedCamera() {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            const deviceId = cameraSelect.value;
+            const constraints = {
+                video: {
+                    deviceId: deviceId ? { exact: deviceId } : undefined,
+                    pan: true,
+                    tilt: true,
+                    zoom: true
+                }
+            };
+
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+                videoTrack = currentStream.getVideoTracks()[0];
+                
+                const capabilities = videoTrack.getCapabilities();
+                log(`Native PTZ Capabilities Detected: Pan=[${capabilities.pan?.min}, ${capabilities.pan?.max}], Zoom=[${capabilities.zoom?.min}, ${capabilities.zoom?.max}]`);
+                
+                updateDisplay();
+            } catch (err) {
+                log(`Camera Error: ${err.message}. If prompt appears, grant Pan/Tilt/Zoom permission.`);
+            }
+        }
+
+        async function moveMotor(panDir, tiltDir, zoomDir) {
+            if (!videoTrack || isMoving) return;
+            isMoving = true;
+            setButtonsDisabled(true);
+
+            try {
+                const caps = videoTrack.getCapabilities();
+                const settings = videoTrack.getSettings();
+
+                // Compute smooth step sizes based on hardware capabilities
+                const panStep = caps.pan ? (caps.pan.step || 3600) * 3 : 0;
+                const tiltStep = caps.tilt ? (caps.tilt.step || 3600) * 3 : 0;
+                const zoomStep = caps.zoom ? (caps.zoom.step || 10) * 3 : 0;
+
+                let targetPan = (settings.pan || 0) + (panDir * panStep);
+                let targetTilt = (settings.tilt || 0) + (tiltDir * tiltStep);
+                let targetZoom = (settings.zoom || 100) + (zoomDir * zoomStep);
+
+                // Enforce hardware bounds
+                if (caps.pan) targetPan = Math.max(caps.pan.min, Math.min(caps.pan.max, targetPan));
+                if (caps.tilt) targetTilt = Math.max(caps.tilt.min, Math.min(caps.tilt.max, targetTilt));
+                if (caps.zoom) targetZoom = Math.max(caps.zoom.min, Math.min(caps.zoom.max, targetZoom));
+
+                const advancedConstraints = {};
+                if (panDir !== 0 && caps.pan) advancedConstraints.pan = targetPan;
+                if (tiltDir !== 0 && caps.tilt) advancedConstraints.tilt = targetTilt;
+                if (zoomDir !== 0 && caps.zoom) advancedConstraints.zoom = targetZoom;
+
+                await videoTrack.applyConstraints({ advanced: [advancedConstraints] });
+                updateDisplay();
+                log(`Motor Moved: Pan=${targetPan}, Tilt=${targetTilt}, Zoom=${targetZoom}`);
+            } catch (err) {
+                log(`Hardware Move Error: ${err.message}`);
+            } finally {
+                isMoving = false;
+                setButtonsDisabled(false);
+            }
+        }
+
+        async function resetToCenter() {
+            if (!videoTrack || isMoving) return;
+            isMoving = true;
+            setButtonsDisabled(true);
+
+            try {
+                const caps = videoTrack.getCapabilities();
+                const defaultZoom = caps.zoom ? caps.zoom.min : 100;
+
+                await videoTrack.applyConstraints({
+                    advanced: [{ pan: 0, tilt: 0, zoom: defaultZoom }]
+                });
+                updateDisplay();
+                log("Reset camera to center (0, 0, 1x).");
+            } catch (err) {
+                log(`Reset Error: ${err.message}`);
+            } finally {
+                isMoving = false;
+                setButtonsDisabled(false);
+            }
+        }
+
+        async function goToPreset(pan, tilt, zoom) {
+            if (!videoTrack || isMoving) return;
+            isMoving = true;
+            setButtonsDisabled(true);
+            log(`Recalling Preset: Pan=${pan}, Tilt=${tilt}, Zoom=${zoom}...`);
+
+            try {
+                await videoTrack.applyConstraints({
+                    advanced: [{ pan: pan, tilt: tilt, zoom: zoom }]
+                });
+                updateDisplay();
+                log("Arrived at preset position.");
+            } catch (err) {
+                log(`Preset Recall Error: ${err.message}`);
+            } finally {
+                isMoving = false;
+                setButtonsDisabled(false);
+            }
+        }
+
+        function saveLocation() {
+            if (!videoTrack) return;
+            const settings = videoTrack.getSettings();
+            const name = document.getElementById('label').value || "Preset Location";
+            const presets = JSON.parse(localStorage.getItem('chromebook_ptz_presets') || '{}');
+            
+            presets[name] = {
+                pan: settings.pan || 0,
+                tilt: settings.tilt || 0,
+                zoom: settings.zoom || 100
+            };
+            
+            localStorage.setItem('chromebook_ptz_presets', JSON.stringify(presets));
+            loadPresets();
+        }
+
+        function deleteLocation(name) {
+            const presets = JSON.parse(localStorage.getItem('chromebook_ptz_presets') || '{}');
+            delete presets[name];
+            localStorage.setItem('chromebook_ptz_presets', JSON.stringify(presets));
+            loadPresets();
+        }
+
+        function clearAllLocations() {
+            if (confirm("Delete all saved locations?")) {
+                localStorage.removeItem('chromebook_ptz_presets');
+                loadPresets();
+            }
+        }
+
+        function loadPresets() {
+            const presets = JSON.parse(localStorage.getItem('chromebook_ptz_presets') || '{}');
+            let html = '<h3>Saved Locations</h3>';
+            for (let key in presets) {
+                const p = presets[key];
+                html += `<div class="preset-card">
+                    <div>
+                        <strong>${key}</strong><br>
+                        <small>Pan: ${Math.round(p.pan)} | Tilt: ${Math.round(p.tilt)} | Zoom: ${Math.round(p.zoom)}</small>
+                    </div>
+                    <div>
+                        <button class="btn-success preset-btn" style="padding: 5px 10px; margin-right: 4px;" onclick="goToPreset(${p.pan}, ${p.tilt}, ${p.zoom})">Go</button>
+                        <button class="btn-danger preset-btn" style="padding: 5px 8px;" onclick="deleteLocation('${key}')">✕</button>
+                    </div>
+                </div>`;
+            }
+            document.getElementById('presets').innerHTML = html;
+        }
+
+        async function init() {
+            try {
+                const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                tempStream.getTracks().forEach(t => t.stop());
+                await listCameras();
+                await startSelectedCamera();
+            } catch (e) {
+                log(`Camera Permissions: ${e.message}`);
+            }
+            loadPresets();
+        }
+
+        init();
+    </script>
+</body>
+</html>
