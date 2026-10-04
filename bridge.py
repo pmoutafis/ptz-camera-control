@@ -31,10 +31,10 @@ def init_camera():
                 return
     print("[Bridge] Warning: No active camera found, defaulting to /dev/video0")
 
-# Run node detection on startup
 init_camera()
 
 def run_v4l2(control, value):
+    """Executes instant native Linux hardware commands."""
     with v4l2_lock:
         try:
             subprocess.run(["v4l2-ctl", "-d", VIDEO_DEV, "-c", f"{control}={value}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -42,6 +42,7 @@ def run_v4l2(control, value):
             print(f"[Bridge Error] v4l2-ctl failed: {e}")
 
 def pulse_ptz(pan=0, tilt=0, zoom_dir=0, duration=0.1):
+    """Sends native speed vectors and halts exactly after duration."""
     global current_zoom
     try:
         if zoom_dir != 0:
@@ -51,7 +52,9 @@ def pulse_ptz(pan=0, tilt=0, zoom_dir=0, duration=0.1):
         if pan != 0 or tilt != 0:
             if pan != 0: run_v4l2("pan_speed", pan)
             if tilt != 0: run_v4l2("tilt_speed", tilt)
+            
             time.sleep(duration)
+            
             if pan != 0: run_v4l2("pan_speed", 0)
             if tilt != 0: run_v4l2("tilt_speed", 0)
             
