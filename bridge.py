@@ -12,25 +12,27 @@ CORS(app)
 uvcc_lock = threading.Lock()
 
 def run_uvcc(command_args):
-    """Executes a uvcc command safely via Linux subprocess."""
+    """Executes uvcc commands with minimal overhead."""
     with uvcc_lock:
         try:
             cmd = ["uvcc"] + command_args
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
-            return result.returncode == 0, result.stdout.strip() or result.stderr.strip()
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+            return result.returncode == 0
         except Exception as e:
-            return False, str(e)
+            print(f"[Bridge Error] uvcc failed: {e}")
+            return False
 
 def pulse_ptz(pan=0, tilt=0, zoom=0, duration=0.2):
-    """Sends relative PTZ pulses and stops movement automatically."""
+    """Sends speed vectors and halts movement after the specified duration."""
     try:
         if pan != 0 or tilt != 0:
-            run_uvcc(["set", "relative_pan_tilt", str(pan), str(tilt)])
+            # Increase tilt magnitude to 2 to ensure motor friction threshold is passed
+            t_val = tilt * 2 if abs(tilt) == 1 else tilt
+            run_uvcc(["set", "relative_pan_tilt", str(pan), str(t_val)])
             time.sleep(duration)
             run_uvcc(["set", "relative_pan_tilt", "0", "0"])
         
         if zoom != 0:
-            # Logitech UVC Zoom accepts relative steps (+1 / -1)
             run_uvcc(["set", "zoom_relative", str(zoom)])
             time.sleep(duration)
             run_uvcc(["set", "zoom_relative", "0"])
@@ -39,12 +41,7 @@ def pulse_ptz(pan=0, tilt=0, zoom=0, duration=0.2):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({
-        "status": "connected",
-        "platform": "Raspberry Pi OS (Linux)",
-        "driver": "uvcc (UVC Relative)",
-        "timestamp": time.time()
-    })
+    return jsonify({"status": "connected", "platform": "Raspberry Pi OS"})
 
 @app.route('/ptz', methods=['POST'])
 def ptz_control():
@@ -54,39 +51,42 @@ def ptz_control():
     zoom = int(data.get('zoom', 0))
     duration = float(data.get('duration', 0.2))
 
-    threading.Thread(target=pulse_ptz, args=(pan, tilt, zoom, duration)).start()
-    return jsonify({"status": "ok", "action": {"pan": pan, "tilt": tilt, "zoom": zoom, "duration": duration}})
+    threading.Thread(target=pulse_ptz, args=(pan, tilt, zoom, duration), daemon=True).start()
+    return jsonify({"status": "ok"})
 
 @app.route('/ptz/stop', methods=['POST'])
 def ptz_stop():
-    run_uvcc(["set", "relative_pan_tilt", "0", "0"])
-    run_uvcc(["set", "zoom_relative", "0"])
+    threading.Thread(target=lambda: (
+        run_uvcc(["set", "relative_pan_tilt", "0", "0"]),
+        run_uvcc(["set", "zoom_relative", "0"])
+    ), daemon=True).start()
     return jsonify({"status": "stopped"})
 
-def find_working_camera_index():
-    """Scans video nodes to find the active camera stream."""
-    for idx in [0, 2, 4, 1, 3]:
-        cap = cv2.VideoCapture(idx)
-        if cap.isOpened():
-            ret, frame = cap.read()
-            cap.release()
-            if ret and frame is not None:
-                print(f"[Bridge] Found working video stream at /dev/video{idx}")
-                return idx
-    return 0
-
 def generate_mjpeg_stream():
-    cam_index = find_working_camera_index()
-    cap = cv2.VideoCapture(cam_index)
+    """Forces MJPG format on video nodes to fix black video feed on Raspberry Pi."""
+    cam_index = 0
+    for idx in [0, 1, 2, 4]:
+        cap_test = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+        if cap_test.isOpened():
+            cap_test.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            ret, frame = cap_test.read()
+            cap_test.release()
+            if ret and frame is not None:
+                cam_index = idx
+                break
+
+    cap = cv2.VideoCapture(cam_index, cv2.CAP_V4L2)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     while True:
         success, frame = cap.read()
-        if not success:
-            time.sleep(0.1)
+        if not success or frame is None:
+            time.sleep(0.03)
             continue
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
         if not ret:
             continue
         yield (b'--frame\r\n'
@@ -98,8 +98,4 @@ def video_feed():
     return Response(generate_mjpeg_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    print("=========================================")
-    print("  Raspberry Pi PTZ Control Server")
-    print("  Running at: http://127.0.0.1:5001")
-    print("=========================================")
     app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
