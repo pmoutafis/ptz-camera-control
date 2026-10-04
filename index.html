@@ -12,7 +12,7 @@
         .video-header { padding: 10px 14px; background: #0f172a; border-bottom: 1px solid #334155; font-weight: 600; font-size: 0.85rem; color: #94a3b8; display: flex; justify-content: space-between; }
         .video-frame { flex: 1; width: 100%; height: 100%; object-fit: contain; background: #000; }
 
-        .sidebar { flex: 1; display: flex; flex-direction: column; gap: 10px; max-width: 400px; min-width: 310px; overflow-y: auto; }
+        .sidebar { flex: 1; display: flex; flex-direction: column; gap: 10px; max-width: 400px; min-width: 310px; }
         .panel { background: #1e293b; border-radius: 12px; border: 1px solid #334155; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
         .panel-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 700; }
 
@@ -40,7 +40,7 @@
 
         .btn-stop { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); font-size: 0.7rem; }
         .btn-reset { background: #0f172a; border: 1px solid #334155; color: #38bdf8; padding: 6px; border-radius: 6px; font-size: 0.75rem; cursor: pointer; font-weight: 600; }
-        
+
         .zoom-row { display: flex; gap: 6px; }
         .zoom-btn { flex: 1; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; font-weight: 600; cursor: pointer; font-size: 0.8rem; user-select: none; }
         .zoom-btn:disabled { opacity: 0.25; cursor: not-allowed; }
@@ -56,7 +56,6 @@
     </div>
 
     <div class="sidebar">
-        <!-- Tracker Panel -->
         <div class="panel">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div class="panel-title">System Status</div>
@@ -66,7 +65,7 @@
                 </div>
             </div>
 
-            <div class="panel-title" style="margin-top: 4px;">Time Coordinates</div>
+            <div class="panel-title" style="margin-top: 4px;">Time & Absolute Offsets</div>
             <div class="offset-grid">
                 <div class="offset-card">
                     <span class="offset-label">Pan</span>
@@ -77,44 +76,45 @@
                     <span id="offset-tilt" class="offset-value">0.0s</span>
                 </div>
                 <div class="offset-card">
-                    <span class="offset-label">Zoom</span>
+                    <span class="offset-label">Zoom (Abs)</span>
                     <span id="offset-zoom" class="offset-value">100</span>
                 </div>
             </div>
-            
-            <button class="btn-reset" onclick="resetOffsets()">Sync Tracker to Hardware Center (0,0)</button>
+            <button class="btn-reset" onclick="resetOffsets()">Reset Center (0.0s, 100z)</button>
+
+            <div class="panel-title" style="margin-top: 4px;">Step Duration</div>
+            <div class="duration-picker">
+                <button class="duration-btn active" onclick="setDuration(0.1, this)">0.1s</button>
+                <button class="duration-btn" onclick="setDuration(0.2, this)">0.2s</button>
+                <button class="duration-btn" onclick="setDuration(0.4, this)">0.4s</button>
+            </div>
+
+            <div class="panel-title" style="margin-top: 4px;">Activity Log</div>
+            <div id="activity-log" class="tracker-log">V4L2 Native System ready.</div>
         </div>
 
-        <!-- Controls Panel -->
         <div class="panel" style="flex: 1; justify-content: center;">
-            <div class="panel-title" style="display:flex; justify-content:space-between; align-items:center;">
-                <span>Pan / Tilt Controls</span>
-                <div class="duration-picker" style="width: 140px;">
-                    <button class="duration-btn active" onclick="setDuration(0.1, this)">0.1s</button>
-                    <button class="duration-btn" onclick="setDuration(0.2, this)">0.2s</button>
-                    <button class="duration-btn" onclick="setDuration(0.4, this)">0.4s</button>
-                </div>
-            </div>
+            <div class="panel-title" style="text-align: center;">Pan / Tilt Controls</div>
             
-            <div class="dpad-grid" style="margin-top:12px;">
+            <div class="dpad-grid">
                 <div></div>
                 <button id="btn-up" class="btn" onclick="sendPtz(0, 1, 0)">▲</button>
                 <div></div>
+
                 <button id="btn-left" class="btn" onclick="sendPtz(-1, 0, 0)">◀</button>
                 <button class="btn btn-stop" onclick="stopPtz()">STOP</button>
                 <button id="btn-right" class="btn" onclick="sendPtz(1, 0, 0)">▶</button>
+
                 <div></div>
                 <button id="btn-down" class="btn" onclick="sendPtz(0, -1, 0)">▼</button>
                 <div></div>
             </div>
 
-            <div class="panel-title" style="text-align: center; margin-top: 12px;">Zoom Controls</div>
+            <div class="panel-title" style="text-align: center; margin-top: 8px;">Zoom Controls</div>
             <div class="zoom-row">
                 <button id="btn-zoomin" class="zoom-btn" onclick="sendPtz(0, 0, 1)">🔍 Zoom In (+)</button>
                 <button id="btn-zoomout" class="zoom-btn" onclick="sendPtz(0, 0, -1)">🔍 Zoom Out (-)</button>
             </div>
-            
-            <div id="activity-log" class="tracker-log" style="margin-top:12px;">Hardware synced. Ready.</div>
         </div>
     </div>
 
@@ -122,6 +122,7 @@
         const BRIDGE_URL = "http://127.0.0.1:5001";
         let pulseDuration = 0.1; 
 
+        // Calibrated Asymmetric Physical Limits
         const LIMITS = { panMin: -6.8, panMax: 6.8, tiltMin: -2.4, tiltMax: 2.0, zoomMin: 100, zoomMax: 1000 };
         
         let currentPanSec = 0;
@@ -133,6 +134,7 @@
             pulseDuration = val;
             document.querySelectorAll('.duration-btn').forEach(btn => btn.classList.remove('active'));
             element.classList.add('active');
+            logActivity(`Step duration set to ${val}s`);
         }
 
         function logActivity(msg) { document.getElementById('activity-log').innerText = msg; }
@@ -161,55 +163,9 @@
         function resetOffsets() {
             if (isExecuting) return;
             currentPanSec = 0; currentTiltSec = 0; currentZoomAbs = 100;
+            fetch(`${BRIDGE_URL}/ptz/stop`, { method: 'POST' });
             updateDisplay();
-            logActivity("Tracker re-synced to hardware center.");
-        }
-
-        async function sendPtz(pan = 0, tilt = 0, zoom = 0) {
-            if (isExecuting) return;
-            
-            const deltaPan = pan * pulseDuration;
-            const deltaTilt = tilt * pulseDuration;
-            const deltaZoom = zoom * 100;
-
-            const targetPan = Math.max(LIMITS.panMin, Math.min(LIMITS.panMax, currentPanSec + deltaPan));
-            const targetTilt = Math.max(LIMITS.tiltMin, Math.min(LIMITS.tiltMax, currentTiltSec + deltaTilt));
-            const targetZoom = Math.max(LIMITS.zoomMin, Math.min(LIMITS.zoomMax, currentZoomAbs + deltaZoom));
-
-            if (targetPan === currentPanSec && targetTilt === currentTiltSec && targetZoom === currentZoomAbs) {
-                logActivity("Action blocked: Boundary limit reached.");
-                return;
-            }
-
-            isExecuting = true;
-            setButtonsState(true);
-
-            fetch(`${BRIDGE_URL}/ptz`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pan, tilt, zoom, duration: pulseDuration })
-            });
-
-            // Dynamic lock time: 1000ms for Zoom, exact pulse duration for Pan/Tilt
-            const lockTimeMs = (zoom !== 0) ? 1000 : (pulseDuration * 1000) + 50;
-
-            setTimeout(() => {
-                currentPanSec = targetPan;
-                currentTiltSec = targetTilt;
-                currentZoomAbs = targetZoom;
-                isExecuting = false;
-                setButtonsState(false);
-                updateDisplay();
-                logActivity(`Moving: Pan=${pan}, Tilt=${tilt}, Zoom=${zoom}`);
-            }, lockTimeMs);
-        }
-
-        async function stopPtz() {
-            logActivity(`Emergency Stop Triggered`);
-            isExecuting = false;
-            setButtonsState(false);
-            try { await fetch(`${BRIDGE_URL}/ptz/stop`, { method: 'POST' }); } catch {}
-            updateDisplay();
+            logActivity("Offsets reset to Center (0.0s, 100z).");
         }
 
         async function checkHealth() {
@@ -224,6 +180,55 @@
                 document.getElementById('status-text').innerText = "Disconnected";
             }
         }
+
+        async function sendPtz(pan = 0, tilt = 0, zoom = 0) {
+            if (isExecuting) return;
+
+            const deltaPan = pan * pulseDuration;
+            const deltaTilt = tilt * pulseDuration;
+            const deltaZoom = zoom * 100;
+
+            const targetPan = Math.max(LIMITS.panMin, Math.min(LIMITS.panMax, currentPanSec + deltaPan));
+            const targetTilt = Math.max(LIMITS.tiltMin, Math.min(LIMITS.tiltMax, currentTiltSec + deltaTilt));
+            const targetZoom = Math.max(LIMITS.zoomMin, Math.min(LIMITS.zoomMax, currentZoomAbs + deltaZoom));
+
+            if (targetPan === currentPanSec && targetTilt === currentTiltSec && targetZoom === currentZoomAbs) {
+                logActivity("Action blocked: Hardware limit reached.");
+                return;
+            }
+
+            isExecuting = true;
+            setButtonsState(true);
+
+            currentPanSec = targetPan;
+            currentTiltSec = targetTilt;
+            currentZoomAbs = targetZoom;
+            updateDisplay();
+
+            logActivity(`Moving: Pan=${pan}, Tilt=${tilt}, Zoom=${zoom}`);
+            
+            fetch(`${BRIDGE_URL}/ptz`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pan, tilt, zoom, duration: pulseDuration })
+            }).catch(() => logActivity("Command failed"));
+
+            // Unified lock duration for all controls (Pan, Tilt, Zoom)
+            setTimeout(() => {
+                isExecuting = false;
+                setButtonsState(false);
+                updateDisplay();
+            }, (pulseDuration * 1000) + 50);
+        }
+
+        async function stopPtz() {
+            logActivity(`Emergency Stop Triggered`);
+            isExecuting = false;
+            setButtonsState(false);
+            try { await fetch(`${BRIDGE_URL}/ptz/stop`, { method: 'POST' }); } catch {}
+            updateDisplay();
+        }
+
         setInterval(checkHealth, 3000);
         checkHealth();
         updateDisplay();
