@@ -11,10 +11,30 @@ CORS(app)
 
 v4l2_lock = threading.Lock()
 VIDEO_DEV = "/dev/video0"
-current_zoom = 100  # Camera default zoom_absolute is 100
+CAM_INDEX = 0
+current_zoom = 100
+
+def init_camera():
+    """Scans for the active camera node to survive reboots."""
+    global VIDEO_DEV, CAM_INDEX
+    print("[Bridge] Scanning for active camera node...")
+    for idx in [0, 1, 2, 4]:
+        cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            ret, frame = cap.read()
+            cap.release()
+            if ret and frame is not None:
+                CAM_INDEX = idx
+                VIDEO_DEV = f"/dev/video{idx}"
+                print(f"[Bridge] Locked camera to {VIDEO_DEV}")
+                return
+    print("[Bridge] Warning: No active camera found, defaulting to /dev/video0")
+
+# Run node detection on startup
+init_camera()
 
 def run_v4l2(control, value):
-    """Executes instant native Linux hardware commands."""
     with v4l2_lock:
         try:
             subprocess.run(["v4l2-ctl", "-d", VIDEO_DEV, "-c", f"{control}={value}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -22,21 +42,16 @@ def run_v4l2(control, value):
             print(f"[Bridge Error] v4l2-ctl failed: {e}")
 
 def pulse_ptz(pan=0, tilt=0, zoom_dir=0, duration=0.1):
-    """Sends native speed vectors and halts exactly after duration."""
     global current_zoom
     try:
-        # 1. Handle Absolute Zoom (Min 100, Max 1000)
         if zoom_dir != 0:
             current_zoom = max(100, min(1000, current_zoom + (zoom_dir * 100)))
             run_v4l2("zoom_absolute", current_zoom)
             
-        # 2. Handle Relative Pan/Tilt Speed
         if pan != 0 or tilt != 0:
             if pan != 0: run_v4l2("pan_speed", pan)
             if tilt != 0: run_v4l2("tilt_speed", tilt)
-            
             time.sleep(duration)
-            
             if pan != 0: run_v4l2("pan_speed", 0)
             if tilt != 0: run_v4l2("tilt_speed", 0)
             
@@ -45,7 +60,7 @@ def pulse_ptz(pan=0, tilt=0, zoom_dir=0, duration=0.1):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "connected", "platform": "Native Linux V4L2"})
+    return jsonify({"status": "connected", "node": VIDEO_DEV})
 
 @app.route('/ptz', methods=['POST'])
 def ptz_control():
@@ -65,7 +80,7 @@ def ptz_stop():
     return jsonify({"status": "stopped"})
 
 def generate_mjpeg_stream():
-    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+    cap = cv2.VideoCapture(CAM_INDEX, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -88,7 +103,6 @@ def video_feed():
     return Response(generate_mjpeg_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    # Ensure motors are stopped on startup
     run_v4l2("pan_speed", 0)
     run_v4l2("tilt_speed", 0)
     app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
