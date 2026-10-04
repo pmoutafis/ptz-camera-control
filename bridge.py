@@ -9,7 +9,6 @@ import cv2
 app = Flask(__name__)
 CORS(app)
 
-# Lock to ensure commands don't overlap on the USB bus
 uvcc_lock = threading.Lock()
 
 def run_uvcc(command_args):
@@ -23,7 +22,7 @@ def run_uvcc(command_args):
             return False, str(e)
 
 def pulse_ptz(pan=0, tilt=0, zoom=0, duration=0.2):
-    """Sends relative PTZ pulses and automatically stops movement after the specified duration."""
+    """Sends relative PTZ pulses and stops movement automatically."""
     try:
         if pan != 0 or tilt != 0:
             run_uvcc(["set", "relative_pan_tilt", str(pan), str(tilt)])
@@ -31,6 +30,7 @@ def pulse_ptz(pan=0, tilt=0, zoom=0, duration=0.2):
             run_uvcc(["set", "relative_pan_tilt", "0", "0"])
         
         if zoom != 0:
+            # Logitech UVC Zoom accepts relative steps (+1 / -1)
             run_uvcc(["set", "zoom_relative", str(zoom)])
             time.sleep(duration)
             run_uvcc(["set", "zoom_relative", "0"])
@@ -54,7 +54,6 @@ def ptz_control():
     zoom = int(data.get('zoom', 0))
     duration = float(data.get('duration', 0.2))
 
-    # Run in background thread for instantaneous web response
     threading.Thread(target=pulse_ptz, args=(pan, tilt, zoom, duration)).start()
     return jsonify({"status": "ok", "action": {"pan": pan, "tilt": tilt, "zoom": zoom, "duration": duration}})
 
@@ -64,20 +63,29 @@ def ptz_stop():
     run_uvcc(["set", "zoom_relative", "0"])
     return jsonify({"status": "stopped"})
 
-def generate_mjpeg_stream():
-    """Generates an MJPEG video stream from /dev/video0 for the web dashboard."""
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("[Warning] Could not open /dev/video0 for video stream.")
-        return
+def find_working_camera_index():
+    """Scans video nodes to find the active camera stream."""
+    for idx in [0, 2, 4, 1, 3]:
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            ret, frame = cap.read()
+            cap.release()
+            if ret and frame is not None:
+                print(f"[Bridge] Found working video stream at /dev/video{idx}")
+                return idx
+    return 0
 
+def generate_mjpeg_stream():
+    cam_index = find_working_camera_index()
+    cap = cv2.VideoCapture(cam_index)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
     while True:
         success, frame = cap.read()
         if not success:
-            break
+            time.sleep(0.1)
+            continue
         ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ret:
             continue
@@ -92,7 +100,6 @@ def video_feed():
 if __name__ == '__main__':
     print("=========================================")
     print("  Raspberry Pi PTZ Control Server")
-    print("  Logitech PTZ Pro 2 Dedicated Driver")
     print("  Running at: http://127.0.0.1:5001")
     print("=========================================")
     app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
