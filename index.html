@@ -40,7 +40,6 @@
 
         .btn-stop { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); font-size: 0.7rem; }
         .btn-reset { background: #0f172a; border: 1px solid #334155; color: #38bdf8; padding: 6px; border-radius: 6px; font-size: 0.75rem; cursor: pointer; font-weight: 600; }
-
         
         .zoom-row { display: flex; gap: 6px; }
         .zoom-btn { flex: 1; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; font-weight: 600; cursor: pointer; font-size: 0.8rem; user-select: none; }
@@ -91,9 +90,9 @@
             <div class="panel-title" style="display:flex; justify-content:space-between; align-items:center;">
                 <span>Pan / Tilt Controls</span>
                 <div class="duration-picker" style="width: 140px;">
-                    <button class="duration-btn active" onclick="setDuration(0.1, this)">.1s</button>
-                    <button class="duration-btn" onclick="setDuration(0.2, this)">.2s</button>
-                    <button class="duration-btn" onclick="setDuration(0.4, this)">.4s</button>
+                    <button class="duration-btn active" onclick="setDuration(0.1, this)">0.1s</button>
+                    <button class="duration-btn" onclick="setDuration(0.2, this)">0.2s</button>
+                    <button class="duration-btn" onclick="setDuration(0.4, this)">0.4s</button>
                 </div>
             </div>
             
@@ -123,7 +122,6 @@
         const BRIDGE_URL = "http://127.0.0.1:5001";
         let pulseDuration = 0.1; 
 
-        // Confirmed Asymmetric Bounds
         const LIMITS = { panMin: -6.8, panMax: 6.8, tiltMin: -2.4, tiltMax: 2.0, zoomMin: 100, zoomMax: 1000 };
         
         let currentPanSec = 0;
@@ -192,7 +190,9 @@
                 body: JSON.stringify({ pan, tilt, zoom, duration: pulseDuration })
             });
 
-            // Unlock UI precisely when movement completes
+            // Dynamic lock time: 1000ms for Zoom, exact pulse duration for Pan/Tilt
+            const lockTimeMs = (zoom !== 0) ? 1000 : (pulseDuration * 1000) + 50;
+
             setTimeout(() => {
                 currentPanSec = targetPan;
                 currentTiltSec = targetTilt;
@@ -201,7 +201,7 @@
                 setButtonsState(false);
                 updateDisplay();
                 logActivity(`Moving: Pan=${pan}, Tilt=${tilt}, Zoom=${zoom}`);
-            }, (pulseDuration * 1000) + 50);
+            }, lockTimeMs);
         }
 
         async function stopPtz() {
