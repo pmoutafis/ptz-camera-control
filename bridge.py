@@ -9,39 +9,43 @@ import cv2
 app = Flask(__name__)
 CORS(app)
 
-uvcc_lock = threading.Lock()
+v4l2_lock = threading.Lock()
+VIDEO_DEV = "/dev/video0"
+current_zoom = 100  # Camera default zoom_absolute is 100
 
-def run_uvcc(command_args):
-    """Executes uvcc commands with minimal overhead."""
-    with uvcc_lock:
+def run_v4l2(control, value):
+    """Executes instant native Linux hardware commands."""
+    with v4l2_lock:
         try:
-            cmd = ["uvcc"] + command_args
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-            return result.returncode == 0
+            subprocess.run(["v4l2-ctl", "-d", VIDEO_DEV, "-c", f"{control}={value}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
-            print(f"[Bridge Error] uvcc failed: {e}")
-            return False
+            print(f"[Bridge Error] v4l2-ctl failed: {e}")
 
-def pulse_ptz(pan=0, tilt=0, zoom=0, duration=0.2):
-    """Sends speed vectors and halts movement after the specified duration."""
+def pulse_ptz(pan=0, tilt=0, zoom_dir=0, duration=0.1):
+    """Sends native speed vectors and halts exactly after duration."""
+    global current_zoom
     try:
+        # 1. Handle Absolute Zoom (Min 100, Max 1000)
+        if zoom_dir != 0:
+            current_zoom = max(100, min(1000, current_zoom + (zoom_dir * 100)))
+            run_v4l2("zoom_absolute", current_zoom)
+            
+        # 2. Handle Relative Pan/Tilt Speed
         if pan != 0 or tilt != 0:
-            # Increase tilt magnitude to 2 to ensure motor friction threshold is passed
-            t_val = tilt * 2 if abs(tilt) == 1 else tilt
-            run_uvcc(["set", "relative_pan_tilt", str(pan), str(t_val)])
+            if pan != 0: run_v4l2("pan_speed", pan)
+            if tilt != 0: run_v4l2("tilt_speed", tilt)
+            
             time.sleep(duration)
-            run_uvcc(["set", "relative_pan_tilt", "0", "0"])
-        
-        if zoom != 0:
-            run_uvcc(["set", "zoom_relative", str(zoom)])
-            time.sleep(duration)
-            run_uvcc(["set", "zoom_relative", "0"])
+            
+            if pan != 0: run_v4l2("pan_speed", 0)
+            if tilt != 0: run_v4l2("tilt_speed", 0)
+            
     except Exception as e:
         print(f"[Bridge Error] Pulse failed: {e}")
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "connected", "platform": "Raspberry Pi OS"})
+    return jsonify({"status": "connected", "platform": "Native Linux V4L2"})
 
 @app.route('/ptz', methods=['POST'])
 def ptz_control():
@@ -49,33 +53,19 @@ def ptz_control():
     pan = int(data.get('pan', 0))
     tilt = int(data.get('tilt', 0))
     zoom = int(data.get('zoom', 0))
-    duration = float(data.get('duration', 0.2))
+    duration = float(data.get('duration', 0.1))
 
     threading.Thread(target=pulse_ptz, args=(pan, tilt, zoom, duration), daemon=True).start()
     return jsonify({"status": "ok"})
 
 @app.route('/ptz/stop', methods=['POST'])
 def ptz_stop():
-    threading.Thread(target=lambda: (
-        run_uvcc(["set", "relative_pan_tilt", "0", "0"]),
-        run_uvcc(["set", "zoom_relative", "0"])
-    ), daemon=True).start()
+    run_v4l2("pan_speed", 0)
+    run_v4l2("tilt_speed", 0)
     return jsonify({"status": "stopped"})
 
 def generate_mjpeg_stream():
-    """Forces MJPG format on video nodes to fix black video feed on Raspberry Pi."""
-    cam_index = 0
-    for idx in [0, 1, 2, 4]:
-        cap_test = cv2.VideoCapture(idx, cv2.CAP_V4L2)
-        if cap_test.isOpened():
-            cap_test.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-            ret, frame = cap_test.read()
-            cap_test.release()
-            if ret and frame is not None:
-                cam_index = idx
-                break
-
-    cap = cv2.VideoCapture(cam_index, cv2.CAP_V4L2)
+    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -98,4 +88,7 @@ def video_feed():
     return Response(generate_mjpeg_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
+    # Ensure motors are stopped on startup
+    run_v4l2("pan_speed", 0)
+    run_v4l2("tilt_speed", 0)
     app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
