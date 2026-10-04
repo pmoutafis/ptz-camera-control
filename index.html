@@ -1,244 +1,98 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Logitech PTZ Hardware Controller</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { background: #181818; color: #fff; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
-        .viewport { width: 90vw; max-width: 640px; height: 360px; margin: 10px auto; border-radius: 8px; border: 2px solid #444; background: #000; overflow: hidden; }
-        video { width: 100%; height: 100%; object-fit: contain; }
-        select { padding: 10px; background: #222; color: #fff; border: 1px solid #555; border-radius: 6px; font-size: 14px; width: 90vw; max-width: 640px; margin-bottom: 10px; }
-        .controls { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 15px; }
-        .grid { display: grid; grid-template-columns: repeat(3, 60px); gap: 8px; }
-        button { background: #333; color: #fff; border: 1px solid #555; padding: 10px; font-size: 14px; border-radius: 6px; cursor: pointer; }
-        button:disabled { opacity: 0.3; cursor: not-allowed; }
-        button:active:not(:disabled) { background: #007acc; }
-        .btn-danger { background: #dc3545; border-color: #dc3545; }
-        .btn-success { background: #28a745; border-color: #28a745; }
-        .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
-        input[type=text] { padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; }
-        .offset-card { background: #222; border: 1px solid #007acc; padding: 12px; border-radius: 8px; width: 300px; margin-bottom: 10px; }
-        .preset-card { background: #222; padding: 10px 15px; border-radius: 6px; margin-top: 8px; text-align: left; width: 300px; display: flex; justify-content: space-between; align-items: center; }
-        #status-log { background: #111; color: #00ff00; font-family: monospace; text-align: left; padding: 10px; margin: 15px auto; max-width: 640px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
-    </style>
-</head>
-<body>
-    <h2>Logitech PTZ Camera Controller</h2>
-    
-    <label for="camera-select">Select Camera Source:</label><br>
-    <select id="camera-select" onchange="startSelectedCamera()"></select>
+import os
+import time
+import subprocess
+import threading
+from flask import Flask, jsonify, request, Response
+from flask_cors import CORS
+import cv2
 
-    <div class="viewport">
-        <video id="webcam" autoplay playsinline muted></video>
-    </div>
-    
-    <div class="controls">
-        <div class="offset-card">
-            <strong style="color: #007acc;">Cumulative Offset from Center</strong><br>
-            <span id="offset-display">Pan Steps: 0 | Tilt Steps: 0 | Zoom Raw: 100</span>
-        </div>
+app = Flask(__name__)
+CORS(app)
 
-        <div class="grid">
-            <div></div><button class="ctrl-btn" onclick="moveMotor('tilt', 1)">▲</button><div></div>
-            <button class="ctrl-btn" onclick="moveMotor('pan', -1)">◀</button>
-            <button class="ctrl-btn" onclick="moveMotor('reset', 0)">⟲</button>
-            <button class="ctrl-btn" onclick="moveMotor('pan', 1)">▶</button>
-            <div></div><button class="ctrl-btn" onclick="moveMotor('tilt', -1)">▼</button><div></div>
-        </div>
+# Lock to ensure commands don't overlap on the USB bus
+uvcc_lock = threading.Lock()
 
-        <div class="row">
-            <button class="ctrl-btn" onclick="moveMotor('zoom', -1)">Zoom Out (-)</button>
-            <button class="ctrl-btn" onclick="moveMotor('zoom', 1)">Zoom In (+)</button>
-        </div>
+def run_uvcc(command_args):
+    """Executes a uvcc command safely via Linux subprocess."""
+    with uvcc_lock:
+        try:
+            cmd = ["uvcc"] + command_args
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
+            return result.returncode == 0, result.stdout.strip() or result.stderr.strip()
+        except Exception as e:
+            return False, str(e)
 
-        <div class="row" style="margin-top: 15px;">
-            <input type="text" id="label" placeholder="Position Name">
-            <button class="btn-success" onclick="saveLocation()">Save Location</button>
-        </div>
+def pulse_ptz(pan=0, tilt=0, zoom=0, duration=0.2):
+    """Sends relative PTZ pulses and automatically stops movement after the specified duration."""
+    try:
+        if pan != 0 or tilt != 0:
+            run_uvcc(["set", "relative_pan_tilt", str(pan), str(tilt)])
+            time.sleep(duration)
+            run_uvcc(["set", "relative_pan_tilt", "0", "0"])
+        
+        if zoom != 0:
+            run_uvcc(["set", "zoom_relative", str(zoom)])
+            time.sleep(duration)
+            run_uvcc(["set", "zoom_relative", "0"])
+    except Exception as e:
+        print(f"[Bridge Error] Pulse failed: {e}")
 
-        <div class="row">
-            <button class="btn-danger" onclick="clearAllLocations()">Clear All Locations</button>
-        </div>
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({
+        "status": "connected",
+        "platform": "Raspberry Pi OS (Linux)",
+        "driver": "uvcc (UVC Relative)",
+        "timestamp": time.time()
+    })
 
-        <div id="presets"></div>
-    </div>
+@app.route('/ptz', methods=['POST'])
+def ptz_control():
+    data = request.json or request.args
+    pan = int(data.get('pan', 0))
+    tilt = int(data.get('tilt', 0))
+    zoom = int(data.get('zoom', 0))
+    duration = float(data.get('duration', 0.2))
 
-    <h3>Hardware Diagnostics</h3>
-    <div id="status-log">Initializing...</div>
+    # Run in background thread for instantaneous web response
+    threading.Thread(target=pulse_ptz, args=(pan, tilt, zoom, duration)).start()
+    return jsonify({"status": "ok", "action": {"pan": pan, "tilt": tilt, "zoom": zoom, "duration": duration}})
 
-    <script>
-        const video = document.getElementById('webcam');
-        const statusLog = document.getElementById('status-log');
-        const cameraSelect = document.getElementById('camera-select');
-        const offsetDisplay = document.getElementById('offset-display');
-        let currentStream = null;
-        let currentCoords = { pan: 0, tilt: 0, zoom: 100 };
-        let isMoving = false;
+@app.route('/ptz/stop', methods=['POST'])
+def ptz_stop():
+    run_uvcc(["set", "relative_pan_tilt", "0", "0"])
+    run_uvcc(["set", "zoom_relative", "0"])
+    return jsonify({"status": "stopped"})
 
-        function log(msg) {
-            statusLog.textContent += "\n" + msg;
-        }
+def generate_mjpeg_stream():
+    """Generates an MJPEG video stream from /dev/video0 for the web dashboard."""
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("[Warning] Could not open /dev/video0 for video stream.")
+        return
 
-        function setButtonsDisabled(disabled) {
-            const btns = document.querySelectorAll('.ctrl-btn, .preset-btn');
-            btns.forEach(b => b.disabled = disabled);
-        }
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-        function updateOffsetDisplay(state) {
-            currentCoords = state;
-            offsetDisplay.textContent = `Pan Steps: ${state.pan} | Tilt Steps: ${state.tilt} | Zoom Raw: ${state.zoom}`;
-        }
+    while True:
+        success, frame = cap.read()
+        if not success:
+            break
+        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if not ret:
+            continue
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+    cap.release()
 
-        async function checkBridge() {
-            try {
-                const res = await fetch('http://127.0.0.1:5001/health');
-                const data = await res.json();
-                if (data.state) updateOffsetDisplay(data.state);
-                log(`Local Bridge Status: CONNECTED (${data.os})`);
-            } catch (e) {
-                log(`Local Bridge Status: NOT DETECTED. Please launch PTZ-Bridge.`);
-            }
-        }
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_mjpeg_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-        async function moveMotor(axis, direction) {
-            if (isMoving) return;
-            isMoving = true;
-            setButtonsDisabled(true);
-
-            try {
-                let url = `http://127.0.0.1:5001/ptz?p=0&t=0&z=0`;
-                if (axis === 'reset') {
-                    url = `http://127.0.0.1:5001/reset`;
-                } else {
-                    let p = axis === 'pan' ? direction : 0;
-                    let t = axis === 'tilt' ? direction : 0;
-                    let z = axis === 'zoom' ? direction : 0;
-                    url = `http://127.0.0.1:5001/ptz?p=${p}&t=${t}&z=${z}`;
-                }
-
-                const res = await fetch(url, { method: 'POST' });
-                const data = await res.json();
-                
-                if (data.state) {
-                    updateOffsetDisplay(data.state);
-                    log(`Position Offset: Pan=${data.state.pan}, Tilt=${data.state.tilt}, Zoom=${data.state.zoom}`);
-                }
-            } catch (err) {
-                log("Bridge error or hardware busy.");
-            } finally {
-                isMoving = false;
-                setButtonsDisabled(false);
-            }
-        }
-
-        async function goToPreset(p, t, z) {
-            if (isMoving) return;
-            isMoving = true;
-            setButtonsDisabled(true);
-            log(`Recalling Preset: Pan=${p}, Tilt=${t}, Zoom=${z}...`);
-
-            try {
-                const res = await fetch(`http://127.0.0.1:5001/goto?p=${p}&t=${t}&z=${z}`, { method: 'POST' });
-                const data = await res.json();
-                if (data.state) {
-                    updateOffsetDisplay(data.state);
-                    log(`Arrived at Preset Position.`);
-                }
-            } catch (err) {
-                log("Error recalling preset position.");
-            } finally {
-                isMoving = false;
-                setButtonsDisabled(false);
-            }
-        }
-
-        async function listCameras() {
-            cameraSelect.innerHTML = '';
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const videoDevices = devices.filter(d => d.kind === 'videoinput');
-
-            videoDevices.forEach((device, index) => {
-                const option = document.createElement('option');
-                option.value = device.deviceId;
-                option.text = device.label || `Camera ${index + 1}`;
-                cameraSelect.appendChild(option);
-            });
-        }
-
-        async function startSelectedCamera() {
-            if (currentStream) {
-                currentStream.getTracks().forEach(track => track.stop());
-            }
-
-            const deviceId = cameraSelect.value;
-            const constraints = {
-                video: deviceId ? { deviceId: { exact: deviceId } } : true
-            };
-
-            try {
-                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = currentStream;
-            } catch (err) {
-                log(`Camera Error: ${err.message}`);
-            }
-        }
-
-        function saveLocation() {
-            const name = document.getElementById('label').value || "Preset Location";
-            const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
-            presets[name] = { ...currentCoords };
-            localStorage.setItem('ptz_presets', JSON.stringify(presets));
-            loadPresets();
-        }
-
-        function deleteLocation(name) {
-            const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
-            delete presets[name];
-            localStorage.setItem('ptz_presets', JSON.stringify(presets));
-            loadPresets();
-        }
-
-        function clearAllLocations() {
-            if (confirm("Delete all saved locations?")) {
-                localStorage.removeItem('ptz_presets');
-                loadPresets();
-            }
-        }
-
-        function loadPresets() {
-            const presets = JSON.parse(localStorage.getItem('ptz_presets') || '{}');
-            let html = '<h3>Saved Locations</h3>';
-            for (let key in presets) {
-                const p = presets[key];
-                html += `<div class="preset-card">
-                    <div>
-                        <strong>${key}</strong><br>
-                        <small>Pan: ${p.pan} | Tilt: ${p.tilt} | Zoom: ${p.zoom}</small>
-                    </div>
-                    <div>
-                        <button class="btn-success preset-btn" style="padding: 5px 10px; margin-right: 4px;" onclick="goToPreset(${p.pan}, ${p.tilt}, ${p.zoom})">Go</button>
-                        <button class="btn-danger preset-btn" style="padding: 5px 8px;" onclick="deleteLocation('${key}')">✕</button>
-                    </div>
-                </div>`;
-            }
-            document.getElementById('presets').innerHTML = html;
-        }
-
-        async function init() {
-            statusLog.textContent = `Initializing Interface...`;
-            await checkBridge();
-            try {
-                const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                tempStream.getTracks().forEach(t => t.stop());
-                await listCameras();
-                await startSelectedCamera();
-            } catch (e) {
-                log(`Camera Permissions: ${e.message}`);
-            }
-            loadPresets();
-        }
-
-        init();
-    </script>
-</body>
-</html>
+if __name__ == '__main__':
+    print("=========================================")
+    print("  Raspberry Pi PTZ Control Server")
+    print("  Logitech PTZ Pro 2 Dedicated Driver")
+    print("  Running at: http://127.0.0.1:5001")
+    print("=========================================")
+    app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
